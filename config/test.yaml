@@ -3,7 +3,7 @@ defaults:
   - transforms: log_spectrogram
   - model: tds_conv_ctc
   - optimizer: adam
-  - lr_scheduler: linear_warmup_cosine_annealing
+  - lr_scheduler: reduce_on_plateau
   - decoder: ctc_greedy
   - cluster: local
   - _self_
