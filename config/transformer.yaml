@@ -3,7 +3,7 @@ defaults:
   - transforms: log_spectrogram
   - model: transformer_ctc
   - optimizer: adam
-  - lr_scheduler: reduce_on_plateau
+  - lr_scheduler: cosine_annealing
   - decoder: ctc_greedy
   - cluster: local
   - _self_
