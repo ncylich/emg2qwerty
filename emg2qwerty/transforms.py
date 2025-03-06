@@ -190,6 +190,46 @@ class LogSpectrogram:
 
 
 @dataclass
+class LogFreqBinsSpectrogram:
+    """
+    Creates log10-scaled spectrogram from an EMG signal with log-spaced frequency bins.
+
+    Args:
+        n_fft (int): Size of FFT, determines max frequency resolution.
+            (default: 64)
+        hop_length (int): Number of samples to stride between consecutive
+            STFT windows. (default: 40)
+    """
+
+    n_fft: int = 64
+    hop_length: int = 40
+    n_mels: int = 6  # Reduce dimensionality with log-spaced bins
+
+    def __post_init__(self) -> None:
+        self.spectrogram = torchaudio.transforms.Spectrogram(
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            normalized=True,
+            # Disable centering of FFT windows to avoid padding inconsistencies
+            # between train and test (due to differing window lengths), as well
+            # as to be more faithful to real-time/streaming execution.
+            center=False,
+        )
+        self.mel_scale = torchaudio.transforms.MelScale(
+            n_mels=self.n_mels,
+            sample_rate=2000,
+            n_stft=self.n_fft // 2 + 1,
+        )
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        x = tensor.movedim(0, -1)  # (T, ..., C) -> (..., C, T)
+        spec = self.spectrogram(x)  # (..., C, freq, T)
+        mel_spec = self.mel_scale(spec)  # (..., C, n_mels, T)
+        logspec = torch.log10(mel_spec + 1e-6)  # (..., C, n_mels, T)
+        return logspec.movedim(-1, 0)  # (T, ..., C, n_mels)
+
+
+@dataclass
 class SpecAugment:
     """Applies time and frequency masking as per the paper
     "SpecAugment: A Simple Data Augmentation Method for Automatic Speech
