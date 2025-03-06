@@ -237,7 +237,7 @@ class TDSConvCTCModule(pl.LightningModule):
             target = LabelData.from_labels(targets[: target_lengths[i], i])
             metrics.update(prediction=predictions[i], target=target)
 
-        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True)
+        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
         return loss
 
     def _epoch_end(self, phase: str) -> None:
