@@ -182,7 +182,13 @@ class TransformerCTCModule(pl.LightningModule):
 
     def _epoch_end(self, phase: str) -> None:
         metrics = self.metrics[f"{phase}_metrics"]
-        self.log_dict(metrics.compute(), sync_dist=True)
+        computed_metrics = metrics.compute()
+
+        # Explicitly log CER with visibility in progress bar
+        if "CER" in computed_metrics:
+            self.log(f"{phase}/CER", computed_metrics["CER"], logger=True, sync_dist=True)
+
+        self.log_dict(computed_metrics, sync_dist=True)
         metrics.reset()
 
     def on_train_epoch_end(self) -> None:
