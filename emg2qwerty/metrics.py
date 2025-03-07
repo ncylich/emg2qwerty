@@ -50,7 +50,7 @@ class CharacterErrorRates(Metric):
 
     def compute(self) -> dict[str, float]:
         def _error_rate(errors: torch.Tensor) -> float:
-            return float(errors.item() / self.target_len.item() * 100.0)
+            return float(errors.item() / self.target_len.item() * 100.0) if self.target_len.item() > 0 else float("nan")
 
         return {
             "CER": _error_rate(self.insertions + self.deletions + self.substitutions),

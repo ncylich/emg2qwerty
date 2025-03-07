@@ -399,6 +399,7 @@ class ConformerCTCModule(pl.LightningModule):
             metrics.update(prediction=predictions[i], target=target)
 
         self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
+        self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
         return loss
 
     def training_step(self, *args, **kwargs) -> torch.Tensor:
@@ -412,13 +413,7 @@ class ConformerCTCModule(pl.LightningModule):
 
     def _epoch_end(self, phase: str) -> None:
         metrics = self.metrics[f"{phase}_metrics"]
-        computed_metrics = metrics.compute()
-
-        # Explicitly log CER with visibility in progress bar
-        if "CER" in computed_metrics:
-            self.log(f"{phase}/CER", computed_metrics["CER"], logger=True, sync_dist=True)
-
-        self.log_dict(computed_metrics, sync_dist=True)
+        self.log_dict(metrics.compute(), logger=True, sync_dist=True, prog_bar=True)
         metrics.reset()
 
     def on_train_epoch_end(self) -> None:

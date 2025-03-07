@@ -3,7 +3,7 @@ defaults:
   - transforms: log_spectrogram
   - model: conformer_ctc
   - optimizer: adam
-  - lr_scheduler: linear_warmup_cosine_annealing
+  - lr_scheduler: cosine_annealing
   - decoder: ctc_greedy
   - cluster: local
   - _self_
