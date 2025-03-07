@@ -413,7 +413,7 @@ class ConformerCTCModule(pl.LightningModule):
 
     def _epoch_end(self, phase: str) -> None:
         metrics = self.metrics[f"{phase}_metrics"]
-        self.log_dict(metrics.compute(), logger=True, sync_dist=True, prog_bar=True)
+        self.log_dict(metrics.compute(), logger=True, sync_dist=True)
         metrics.reset()
 
     def on_train_epoch_end(self) -> None:
