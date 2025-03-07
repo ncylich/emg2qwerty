@@ -287,12 +287,18 @@ class ConformerCTCModule(pl.LightningModule):
             ff_expansion_factor: int = 4,
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
+            ctc_weight: float = 0.7,  # Weight for CTC loss
+            ce_weight: float = 0.3,   # Weight for CE loss
             optimizer: DictConfig = None,
             lr_scheduler: DictConfig = None,
             decoder: DictConfig = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+
+        # Store loss weights
+        self.ctc_weight = ctc_weight
+        self.ce_weight = ce_weight
 
         # Embedding for EMG data
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
@@ -328,8 +334,9 @@ class ConformerCTCModule(pl.LightningModule):
         self.fc = nn.Linear(d_model, charset().num_classes)
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
-        # CTC loss
-        self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
+        # Loss functions
+        self.ctc_loss = nn.CTCLoss(blank=charset().null_class, zero_infinity=True)
+        self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
 
         # Decoder from Hydra config
         self.decoder = instantiate(decoder)
@@ -376,13 +383,28 @@ class ConformerCTCModule(pl.LightningModule):
 
         emissions = self.forward(inputs)
 
-        # CTC loss calculation
-        loss = self.ctc_loss(
+        # CTC loss
+        ctc_loss = self.ctc_loss(
             log_probs=emissions,  # (T, N, num_classes)
             targets=targets.transpose(0, 1),  # (N, T_target)
             input_lengths=input_lengths,  # (N,)
             target_lengths=target_lengths,  # (N,)
         )
+        
+        # CE loss
+        # Reshape log_probs: (T, N, C) -> (T*N, C)
+        ce_logits = emissions.exp().transpose(0, 1).contiguous().view(-1, emissions.size(-1))
+        # Reshape targets: (N, S) -> (N*S)
+        ce_targets = targets.transpose(0, 1).contiguous().view(-1)
+        ce_loss = self.ce_loss(ce_logits, ce_targets)
+        
+        # Combined loss
+        loss = self.ctc_weight * ctc_loss + self.ce_weight * ce_loss
+
+        # Log individual losses
+        self.log(f"{phase}/ctc_loss", ctc_loss, batch_size=N, sync_dist=True)
+        self.log(f"{phase}/ce_loss", ce_loss, batch_size=N, sync_dist=True)
+        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
 
         # Decode emissions for metrics
         predictions = self.decoder.decode_batch(
@@ -398,7 +420,6 @@ class ConformerCTCModule(pl.LightningModule):
             target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
             metrics.update(prediction=predictions[i], target=target)
 
-        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
         self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
         return loss
 
