@@ -391,27 +391,28 @@ class ConformerCTCModule(pl.LightningModule):
             target_lengths=target_lengths,  # (N,)
         )
 
+        ce_loss = torch.zeros().to(emissions.device)
         # CE loss - fix the shape mismatch
         # First transpose to (N, T, C)
         emissions_t = emissions.transpose(0, 1)
 
-        # Create a mask for valid positions based on input lengths
-        mask = torch.arange(emissions.size(0)).unsqueeze(0).to(inputs.device) < input_lengths.unsqueeze(1)
-
-        # Flatten only valid positions for both logits and targets
-        ce_logits = []
-        ce_targets = []
-
-        # TODO: optimize loop & fix padding
-        for i in range(N):
-            valid_len = min(input_lengths[i], targets.size(0))
-            ce_logits.append(emissions_t[i, :valid_len])
-            ce_targets.append(targets[:valid_len, i])
-
-        ce_logits = torch.cat(ce_logits, dim=0)  # Shape: (sum(valid_lengths), C)
-        ce_targets = torch.cat(ce_targets, dim=0)  # Shape: (sum(valid_lengths))
-
-        ce_loss = self.ce_loss(ce_logits, ce_targets)
+        # # Create a mask for valid positions based on input lengths
+        # mask = torch.arange(emissions.size(0)).unsqueeze(0).to(inputs.device) < input_lengths.unsqueeze(1)
+        #
+        # # Flatten only valid positions for both logits and targets
+        # ce_logits = []
+        # ce_targets = []
+        #
+        # # TODO: optimize loop & fix padding
+        # for i in range(N):
+        #     valid_len = min(input_lengths[i], targets.size(0))
+        #     ce_logits.append(emissions_t[i, :valid_len])
+        #     ce_targets.append(targets[:valid_len, i])
+        #
+        # ce_logits = torch.cat(ce_logits, dim=0)  # Shape: (sum(valid_lengths), C)
+        # ce_targets = torch.cat(ce_targets, dim=0)  # Shape: (sum(valid_lengths))
+        #
+        # ce_loss = self.ce_loss(ce_logits, ce_targets)
 
         # Combined loss
         loss = self.ctc_weight * ctc_loss + self.ce_weight * ce_loss
