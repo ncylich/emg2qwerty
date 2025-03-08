@@ -703,10 +703,7 @@ class ConformerDecoder(pl.LightningModule):
             ce_logits = ce_logits.reshape(-1, charset().num_classes)
             ce_targets = ce_targets.reshape(-1)
 
-            ce_loss = self.ce_loss(ce_logits, ce_targets)
-            loss = self.ce_weight * ce_loss
-
-            self.log(f"{phase}/ce_loss", ce_loss, batch_size=N, sync_dist=True)
+            loss = self.ce_loss(ce_logits, ce_targets)
         else:
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)
@@ -740,9 +737,12 @@ class ConformerDecoder(pl.LightningModule):
             # Filter out the special tokens: null, SOS, and EOS
             filtered_target = [t for t in raw_target if
                                t not in [charset().null_class, self.sos_token_id, self.eos_token_id]]
+            filtered_prediction = [t for t in predictions[i] if t
+                                   not in [charset().null_class, self.sos_token_id, self.eos_token_id]]
 
             target = LabelData.from_labels(filtered_target)
-            metrics.update(prediction=predictions[i], target=target)
+            prediction = LabelData.from_labels(filtered_prediction)
+            metrics.update(prediction=prediction, target=target)
 
         self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
         return loss
