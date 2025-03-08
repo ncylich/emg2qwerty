@@ -9,7 +9,7 @@ defaults:
   - _self_
 
 seed: 1501
-batch_size: 512
+batch_size: 128
 num_workers: 8  # Number of workers for dataloading
 train: True  # Whether to train or only run validation and test
 checkpoint: null  # Optional path to checkpoint file
