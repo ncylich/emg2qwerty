@@ -51,7 +51,7 @@ class ConformerCTCModule(pl.LightningModule):
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (N, 2, T, 96) (T, N, 2, 16, 6)
-            SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout, stride=1), # TODO: figure out better way than setting stride to 1
+            # SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout, stride=1),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
