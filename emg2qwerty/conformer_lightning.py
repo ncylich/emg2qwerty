@@ -734,7 +734,14 @@ class ConformerDecoder(pl.LightningModule):
         targets_np = targets.detach().cpu().numpy()
         target_lengths_np = target_lengths.detach().cpu().numpy()
         for i in range(N):
-            target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
+            # Extract the raw target sequence as a list
+            raw_target = targets_np[:target_lengths_np[i], i].tolist()
+
+            # Filter out the special tokens: null, SOS, and EOS
+            filtered_target = [t for t in raw_target if
+                               t not in [charset().null_class, self.sos_token_id, self.eos_token_id]]
+
+            target = LabelData.from_labels(filtered_target)
             metrics.update(prediction=predictions[i], target=target)
 
         self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
