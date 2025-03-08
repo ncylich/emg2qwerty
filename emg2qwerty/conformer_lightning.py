@@ -300,6 +300,146 @@ class SubsampleConvModule(nn.Module):
         return x
 
 
+class TransformerDecoderLayer(nn.Module):
+    def __init__(
+            self,
+            d_model: int,
+            nhead: int,
+            dim_feedforward: int = 2048,
+            dropout: float = 0.1
+    ) -> None:
+        super().__init__()
+
+        # Self-attention with causal masking
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=nhead,
+            dropout=dropout,
+            batch_first=False
+        )
+
+        # Cross-attention to encoder outputs
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=nhead,
+            dropout=dropout,
+            batch_first=False
+        )
+
+        # Feed-forward network
+        self.feed_forward = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            Swish(),
+            nn.Dropout(dropout),
+            nn.Linear(dim_feedforward, d_model),
+            nn.Dropout(dropout)
+        )
+
+        # Layer norms
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+            self,
+            tgt: torch.Tensor,
+            memory: torch.Tensor,
+            tgt_mask: Optional[torch.Tensor] = None,
+            tgt_key_padding_mask: Optional[torch.Tensor] = None,
+            memory_key_padding_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Args:
+            tgt: Target sequence (T_tgt, N, d_model)
+            memory: Encoder outputs (T_src, N, d_model)
+            tgt_mask: Attention mask for self-attention (T_tgt, T_tgt)
+            tgt_key_padding_mask: Key padding mask for target (N, T_tgt)
+            memory_key_padding_mask: Key padding mask for memory (N, T_src)
+        """
+        # Self-attention block
+        tgt2 = self.norm1(tgt)
+        tgt2, _ = self.self_attn(
+            query=tgt2,
+            key=tgt2,
+            value=tgt2,
+            attn_mask=tgt_mask,
+            key_padding_mask=tgt_key_padding_mask
+        )
+        tgt = tgt + self.dropout(tgt2)
+
+        # Cross-attention block
+        tgt2 = self.norm2(tgt)
+        tgt2, _ = self.cross_attn(
+            query=tgt2,
+            key=memory,
+            value=memory,
+            key_padding_mask=memory_key_padding_mask
+        )
+        tgt = tgt + self.dropout(tgt2)
+
+        # Feed-forward block
+        tgt2 = self.norm3(tgt)
+        tgt2 = self.feed_forward(tgt2)
+        tgt = tgt + tgt2
+
+        return tgt
+
+
+class TransformerDecoder(nn.Module):
+    def __init__(
+            self,
+            d_model: int,
+            nhead: int,
+            num_layers: int,
+            dim_feedforward: int = 2048,
+            dropout: float = 0.1
+    ) -> None:
+        super().__init__()
+
+        self.d_model = d_model
+        self.layers = nn.ModuleList([
+            TransformerDecoderLayer(
+                d_model=d_model,
+                nhead=nhead,
+                dim_feedforward=dim_feedforward,
+                dropout=dropout
+            ) for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(
+            self,
+            tgt: torch.Tensor,
+            memory: torch.Tensor,
+            tgt_mask: Optional[torch.Tensor] = None,
+            tgt_key_padding_mask: Optional[torch.Tensor] = None,
+            memory_key_padding_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Args:
+            tgt: Target sequence (T_tgt, N, d_model)
+            memory: Encoder outputs (T_src, N, d_model)
+            tgt_mask: Self-attention mask (T_tgt, T_tgt)
+            tgt_key_padding_mask: Target padding mask (N, T_tgt)
+            memory_key_padding_mask: Memory padding mask (N, T_src)
+        """
+        output = tgt
+
+        for layer in self.layers:
+            output = layer(
+                output,
+                memory,
+                tgt_mask=tgt_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask
+            )
+
+        return self.norm(output)
+
+
 class ConformerCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
@@ -434,6 +574,367 @@ class ConformerCTCModule(pl.LightningModule):
         predictions = self.decoder.decode_batch(
             emissions=emissions.detach().cpu().numpy(),
             emission_lengths=input_lengths.detach().cpu().numpy(),
+        )
+
+        # Update metrics
+        metrics = self.metrics[f"{phase}_metrics"]
+        targets_np = targets.detach().cpu().numpy()
+        target_lengths_np = target_lengths.detach().cpu().numpy()
+        for i in range(N):
+            target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
+            metrics.update(prediction=predictions[i], target=target)
+
+        self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
+        return loss
+
+    def training_step(self, *args, **kwargs) -> torch.Tensor:
+        return self._step("train", *args, **kwargs)
+
+    def validation_step(self, *args, **kwargs) -> torch.Tensor:
+        return self._step("val", *args, **kwargs)
+
+    def test_step(self, *args, **kwargs) -> torch.Tensor:
+        return self._step("test", *args, **kwargs)
+
+    def _epoch_end(self, phase: str) -> None:
+        metrics = self.metrics[f"{phase}_metrics"]
+        self.log_dict(metrics.compute(), logger=True, sync_dist=True)
+        metrics.reset()
+
+    def on_train_epoch_end(self) -> None:
+        self._epoch_end("train")
+
+    def on_validation_epoch_end(self) -> None:
+        self._epoch_end("val")
+
+    def on_test_epoch_end(self) -> None:
+        self._epoch_end("test")
+
+    def configure_optimizers(self) -> dict[str, Any]:
+        return utils.instantiate_optimizer_and_scheduler(
+            self.parameters(),
+            optimizer_config=self.hparams.optimizer,
+            lr_scheduler_config=self.hparams.lr_scheduler,
+        )
+
+
+class ConformerTransducerModule(pl.LightningModule):
+    NUM_BANDS: ClassVar[int] = 2
+    ELECTRODE_CHANNELS: ClassVar[int] = 16
+
+    def __init__(
+            self,
+            in_features: int,
+            mlp_features: Sequence[int],
+            d_model: int,
+            nhead: int,
+            num_encoder_layers: int,
+            num_decoder_layers: int,
+            conv_kernel_size: int = 31,
+            ff_expansion_factor: int = 4,
+            conv_expansion_factor: int = 2,
+            dropout: float = 0.1,
+            ctc_weight: float = 0.3,  # Weight for CTC loss
+            ce_weight: float = 0.7,  # Weight for CE loss (more emphasis on decoder)
+            sos_token_id: int = None,  # Add SOS token ID parameter
+            eos_token_id: int = None,
+            optimizer: DictConfig = None,
+            lr_scheduler: DictConfig = None,
+            decoder: DictConfig = None,
+    ) -> None:
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.sos_token_id = sos_token_id if sos_token_id is not None else charset().sos_class
+        self.eos_token_id = eos_token_id if eos_token_id is not None else charset().eos_class
+
+        # Store loss weights
+        self.ctc_weight = ctc_weight
+        self.ce_weight = ce_weight
+
+        # Embedding for EMG data
+        self.embedding = nn.Sequential(
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            MultiBandRotationInvariantMLP(
+                in_features=in_features,
+                mlp_features=mlp_features,
+                num_bands=self.NUM_BANDS,
+            ),
+            nn.Flatten(start_dim=2),
+            nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model),
+        )
+
+        # Special token embeddings (learned)
+        self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+        self.eos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+
+        # Initialize special embeddings with Xavier/Glorot
+        nn.init.xavier_normal_(self.sos_embedding)
+        nn.init.xavier_normal_(self.eos_embedding)
+
+        # Positional encoding for encoder
+        self.encoder_pos_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
+
+        # Conformer encoder blocks
+        self.conformer_blocks = nn.ModuleList([
+            ConformerBlock(
+                d_model=d_model,
+                num_heads=nhead,
+                conv_kernel_size=conv_kernel_size,
+                ff_expansion_factor=ff_expansion_factor,
+                conv_expansion_factor=conv_expansion_factor,
+                dropout=dropout
+            ) for _ in range(num_encoder_layers)
+        ])
+
+        # CTC projection layer (for auxiliary CTC loss)
+        self.ctc_proj = nn.Linear(d_model, charset().num_classes)
+
+        # Decoder embedding and positional encoding
+        self.decoder_embedding = nn.Embedding(charset().num_classes, d_model)
+        self.decoder_pos_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
+
+        # Transformer decoder
+        self.transformer_decoder = TransformerDecoder(
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_decoder_layers,
+            dim_feedforward=d_model * ff_expansion_factor,
+            dropout=dropout
+        )
+
+        # Output projection
+        self.output_proj = nn.Linear(d_model, charset().num_classes)
+
+        # Loss functions
+        self.ctc_loss = nn.CTCLoss(blank=charset().null_class, zero_infinity=True)
+        self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
+
+        # Beam search decoder
+        self.beam_decoder = instantiate(decoder)
+
+        # Character error rate metrics
+        metrics = MetricCollection([CharacterErrorRates()])
+        self.metrics = nn.ModuleDict(
+            {
+                f"{phase}_metrics": metrics.clone(prefix=f"{phase}/")
+                for phase in ["train", "val", "test"]
+            }
+        )
+
+    def _generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
+        """Generate a square mask for the sequence. The masked positions are filled with float('-inf').
+           Unmasked positions are filled with float(0.0).
+        """
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def encode(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Encode input EMG data with the conformer encoder"""
+        # Embed inputs
+        x = self.embedding(inputs)  # (T, N, d_model)
+        x = self.encoder_pos_encoding(x)
+
+        # Pass through Conformer blocks
+        for block in self.conformer_blocks:
+            x = block(x)
+
+        return x
+
+    def forward(
+            self,
+            inputs: torch.Tensor,
+            targets: Optional[torch.Tensor] = None,
+            target_lengths: Optional[torch.Tensor] = None,
+            teacher_forcing_ratio: float = 1.0
+    ) -> dict[str, torch.Tensor]:
+        """
+        Forward pass through the encoder-decoder model.
+
+        Args:
+            inputs: Input tensor with shape (T, N, bands, electrode_channels, freq)
+            targets: Target tensor with shape (T_target, N) (optional, for training)
+            target_lengths: Lengths of targets (optional, for training)
+            teacher_forcing_ratio: Probability of using teacher forcing
+
+        Returns:
+            Dictionary with encoder and decoder outputs
+        """
+        device = inputs.device
+        encoder_outputs = self.encode(inputs)  # (T, N, d_model)
+
+        # CTC outputs (auxiliary)
+        encoder_logits = self.ctc_proj(encoder_outputs)  # (T, N, num_classes)
+        ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
+
+        # Handle decoder outputs based on training or inference
+        if self.training and targets is not None:
+            # Add EOS tokens to targets for training
+            targets_with_eos, target_lengths_with_eos = self._prepare_targets_for_training(
+                targets, target_lengths)
+
+            batch_size = encoder_outputs.size(1)
+
+            # Start with the learned SOS embedding
+            sos_tokens = self.sos_embedding.expand(-1, batch_size, -1)
+
+            # Convert target tokens to embeddings
+            if targets_with_eos.size(0) > 1:
+                target_emb = self.decoder_embedding(targets_with_eos[:-1])
+                decoder_inputs = torch.cat([sos_tokens, target_emb], dim=0)
+            else:
+                decoder_inputs = sos_tokens
+
+            # Add positional encoding
+            decoder_inputs = self.decoder_pos_encoding(decoder_inputs)
+
+            # Create causal mask
+            tgt_mask = self._generate_square_subsequent_mask(decoder_inputs.size(0)).to(device)
+
+            # Run decoder
+            decoder_outputs = self.transformer_decoder(
+                tgt=decoder_inputs,
+                memory=encoder_outputs,
+                tgt_mask=tgt_mask
+            )
+
+            # Project to vocabulary
+            decoder_logits = self.output_proj(decoder_outputs)  # (T_tgt, N, num_classes)
+            decoder_log_probs = nn.functional.log_softmax(decoder_logits, dim=-1)
+
+        else:
+            # Inference mode
+            batch_size = encoder_outputs.size(1)
+            max_len = 100
+
+            # Start with the learned SOS embedding
+            decoder_input = torch.full((1, batch_size), self.sos_token_id,
+                                       dtype=torch.long, device=device)
+            decoder_outputs = []
+
+            for i in range(max_len):
+                # For SOS token, use special embedding
+                if i == 0:
+                    emb = self.sos_embedding.expand(-1, batch_size, -1)
+                else:
+                    # For normal tokens, use standard embedding
+                    emb = self.decoder_embedding(decoder_input)
+
+                emb = self.decoder_pos_encoding(emb)
+
+                # Create causal mask
+                tgt_mask = self._generate_square_subsequent_mask(emb.size(0)).to(device)
+
+                # Decode one step
+                decoder_output = self.transformer_decoder(
+                    tgt=emb,
+                    memory=encoder_outputs,
+                    tgt_mask=tgt_mask
+                )
+
+                # Get prediction for last position
+                last_output = decoder_output[-1:]  # (1, N, d_model)
+                logits = self.output_proj(last_output)  # (1, N, num_classes)
+
+                # Store output
+                decoder_outputs.append(logits)
+
+                # Sample next token (greedy)
+                next_token = torch.argmax(logits, dim=-1)  # (1, N)
+
+                # Append to input for next iteration
+                decoder_input = torch.cat([decoder_input, next_token], dim=0)
+
+                # Early stopping if all sequences predicted EOS
+                if ((next_token == self.eos_token_id).all()).item():
+                    break
+
+            # Combine all decoder outputs
+            decoder_logits = torch.cat(decoder_outputs, dim=0)  # (T_out, N, num_classes)
+            decoder_log_probs = nn.functional.log_softmax(decoder_logits, dim=-1)
+
+        return {
+            "ctc_logits": encoder_logits,
+            "ctc_log_probs": ctc_log_probs,
+            "decoder_logits": decoder_logits,
+            "decoder_log_probs": decoder_log_probs
+        }
+
+    def _prepare_targets_for_training(self, targets, target_lengths):
+        """
+        Prepares target sequences for training by adding EOS tokens.
+
+        Args:
+            targets: Target tensor with shape (T, N)
+            target_lengths: Tensor of sequence lengths
+
+        Returns:
+            Tuple of (modified_targets, modified_target_lengths)
+        """
+        device = targets.device
+        batch_size = targets.size(1)
+
+        # Create a new tensor with space for EOS tokens
+        max_len = targets.size(0)
+        new_targets = torch.full((max_len+1, batch_size),
+                               charset().null_class,
+                               dtype=targets.dtype,
+                               device=device)
+
+        # Copy original targets
+        new_targets[:max_len] = targets
+
+        # Add EOS tokens at the end of each sequence
+        for i in range(batch_size):
+            new_targets[target_lengths[i], i] = self.eos_token_id
+
+        # Update target lengths to account for EOS tokens
+        new_target_lengths = target_lengths + 1
+
+        return new_targets, new_target_lengths
+
+    def _step(self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs) -> torch.Tensor:
+        inputs = batch["inputs"]
+        targets = batch["targets"]
+        input_lengths = batch["input_lengths"]
+        target_lengths = batch["target_lengths"]
+        N = len(input_lengths)
+
+        # Forward pass
+        outputs = self.forward(inputs, targets, target_lengths)
+
+        # CTC loss
+        ctc_loss = self.ctc_loss(
+            log_probs=outputs["ctc_log_probs"],
+            targets=targets.transpose(0, 1),
+            input_lengths=input_lengths,
+            target_lengths=target_lengths,
+        )
+
+        # Cross-entropy loss (for decoder)
+        decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T, C)
+        targets_t = targets.transpose(0, 1)  # (N, T)
+
+        # Flatten for cross-entropy
+        ce_logits = decoder_logits.reshape(-1, charset().num_classes)
+        ce_targets = targets_t.reshape(-1)
+
+        ce_loss = self.ce_loss(ce_logits, ce_targets)
+
+        # Combined loss
+        loss = self.ctc_weight * ctc_loss + self.ce_weight * ce_loss
+
+        # Log losses
+        self.log(f"{phase}/ctc_loss", ctc_loss, batch_size=N, sync_dist=True)
+        self.log(f"{phase}/ce_loss", ce_loss, batch_size=N, sync_dist=True)
+        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
+
+        # Decode for metrics using beam search
+        predictions = self.beam_decoder.decode_batch(
+            emissions=outputs["decoder_log_probs"].detach().cpu().numpy(),
+            emission_lengths=torch.ones_like(input_lengths).detach().cpu().numpy() * outputs["decoder_log_probs"].size(
+                0),
         )
 
         # Update metrics
