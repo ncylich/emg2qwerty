@@ -4,15 +4,15 @@ module:
   in_features: 96  # freq * n_mels
   mlp_features: [256]
   d_model: 128
-  nhead: 4
-  num_encoder_layers: 8
-  num_decoder_layers: 4
-  ff_expansion_factor: 2
+  nhead: 2
+  num_encoder_layers: 2
+  num_decoder_layers: 2
+  ff_expansion_factor: 1
   conv_kernel_size: 7
   conv_expansion_factor: 1
   dropout: 0.1
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule
-  window_length: 4000  # 4 sec windows for 2kHz EMG
+  window_length: 5000  # 4 sec windows for 2kHz EMG
   padding: [0, 0]  # No padding, [1800, 200]  # 900ms past context, 100ms future context
