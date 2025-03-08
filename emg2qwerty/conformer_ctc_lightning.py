@@ -32,6 +32,7 @@ class ConformerCTCModule(pl.LightningModule):
     def __init__(
             self,
             in_features: int,
+            sub_sample_conv: bool,
             mlp_features: Sequence[int],
             d_model: int,
             nhead: int,
@@ -49,9 +50,9 @@ class ConformerCTCModule(pl.LightningModule):
 
         # Embedding for EMG data
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
-        self.embedding = nn.Sequential(
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (N, 2, T, 96) (T, N, 2, 16, 6)
-            # SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout, stride=1),
+        embeddings = [
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
+            SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout, stride=1) if sub_sample_conv else None,
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
@@ -61,7 +62,9 @@ class ConformerCTCModule(pl.LightningModule):
             nn.Flatten(start_dim=2),
             # Project to model dimension
             nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model),
-        )
+        ]
+        embeddings = [layer for layer in embeddings if layer]
+        self.embedding = nn.Sequential(*embeddings)
 
         # Positional encoding
         self.positional_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
