@@ -130,9 +130,19 @@ class CharacterSet:
         return len(self)
 
     @property
-    def num_classes(self) -> int:
-        """Number of training classes including null-class (blank label)."""
+    def sos_class(self) -> int:
+        """Categorical label for the start-of-sequence token."""
         return len(self) + 1
+
+    @property
+    def eos_class(self) -> int:
+        """Categorical label for the end-of-sequence token."""
+        return len(self) + 2
+
+    @property
+    def num_classes(self) -> int:
+        """Number of training classes including the null, SOS, and EOS tokens."""
+        return len(self) + 3
 
     @property
     def allowed_keys(self) -> tuple[KeyChar, ...]:

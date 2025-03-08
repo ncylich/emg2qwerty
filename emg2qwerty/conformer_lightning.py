@@ -19,8 +19,8 @@ from torch.utils.data import ConcatDataset, DataLoader
 from torchmetrics import MetricCollection
 
 from emg2qwerty import utils
-from emg2qwerty.charset import charset
-from emg2qwerty.data import LabelData, WindowedEMGDataset
+from emg2qwerty.ce_charset import charset
+from emg2qwerty.ce_data import LabelData, WindowedEMGDataset
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
@@ -460,8 +460,8 @@ class ConformerDecoder(pl.LightningModule):
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
             optimizer: DictConfig = None,
-            lr_scheduler: DictConfig = None,
             decoder: DictConfig = None,
+            lr_scheduler: DictConfig = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()

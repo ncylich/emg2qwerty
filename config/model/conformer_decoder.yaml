@@ -3,12 +3,12 @@ module:
   _target_: emg2qwerty.conformer_lightning.ConformerDecoder
   in_features: 96  # freq * channels = (n_fft // 2 + 1) * 16
   mlp_features: [256]
-  d_model: 128
-  nhead: 4
-  num_encoder_layers: 4
-  num_decoder_layers: 4
+  d_model: 256
+  nhead: 16
+  num_encoder_layers: 8
+  num_decoder_layers: 8
   ff_expansion_factor: 2
-  conv_kernel_size: 15
+  conv_kernel_size: 7
   conv_expansion_factor: 1
   dropout: 0.1
 
