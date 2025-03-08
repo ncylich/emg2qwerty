@@ -1,7 +1,7 @@
 defaults:
   - user: single_user
   - transforms: log_spectrogram
-  - model: conformer_decoder
+  - model: conformer_decoder_ce
   - optimizer: adam
   - lr_scheduler: cosine_annealing
   - decoder: ctc_greedy
