@@ -277,10 +277,11 @@ class ConformerBlock(nn.Module):
 class SubsampleConvModule(nn.Module):
     def __init__(self, channels: int, kernel_size: int, stride: int = 2, dropout: float = 0.1) -> None:
         super().__init__()
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size=kernel_size, stride=stride)
-        self.batch_norm1 = nn.BatchNorm2d(channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=kernel_size, stride=stride)
-        self.batch_norm2 = nn.BatchNorm2d(channels)
+        padding = (kernel_size - 1) // 2
+        self.conv1 = nn.Conv2d(channels, channels * 2, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.batch_norm1 = nn.BatchNorm2d(channels * 2)
+        self.conv2 = nn.Conv2d(channels * 2, channels * 4, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.batch_norm2 = nn.BatchNorm2d(channels * 4)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -472,7 +473,7 @@ class ConformerCTCModule(pl.LightningModule):
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
-            SubsampleConvModule(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS, kernel_size=3, dropout=dropout),
+            SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
