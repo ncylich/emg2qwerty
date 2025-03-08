@@ -539,12 +539,8 @@ class ConformerDecoder(pl.LightningModule):
         )
 
     def _generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
-        """Generate a square mask for the sequence. The masked positions are filled with float('-inf').
-           Unmasked positions are filled with float(0.0).
-        """
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        """Generate a square mask where upper triangle is True (masked out, not including diagonal)"""
+        return torch.tril(torch.ones(sz, sz)) == 0
 
     def encode(self, inputs: torch.Tensor) -> torch.Tensor:
         """Encode input EMG data with the conformer encoder"""
@@ -708,7 +704,8 @@ class ConformerDecoder(pl.LightningModule):
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)
 
-        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
+        if phase == "train":
+            self.log(f"train/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
 
         # Greedy decoding for metrics
         # Obtain predicted tokens from decoder_log_probs (shape: T x N)
