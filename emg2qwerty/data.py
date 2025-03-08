@@ -506,6 +506,9 @@ class WindowedEMGDataset(torch.utils.data.Dataset):
         end_t = timestamps[(offset + self.window_length - 1) - window_start]
         label_data = self.session.ground_truth(start_t, end_t)
         labels = torch.as_tensor(label_data.labels)
+        # Append EOS token to the label sequence for training
+        eos_token = torch.tensor([charset().eos_class], dtype=labels.dtype)
+        labels = torch.cat([labels, eos_token])
 
         return emg, labels
 

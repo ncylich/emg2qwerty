@@ -634,8 +634,6 @@ class ConformerTransducerModule(pl.LightningModule):
             ff_expansion_factor: int = 4,
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
-            ctc_weight: float = 0.3,  # Weight for CTC loss
-            ce_weight: float = 0.7,  # Weight for CE loss (more emphasis on decoder)
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
             optimizer: DictConfig = None,
@@ -647,10 +645,6 @@ class ConformerTransducerModule(pl.LightningModule):
 
         self.sos_token_id = sos_token_id if sos_token_id is not None else charset().sos_class
         self.eos_token_id = eos_token_id if eos_token_id is not None else charset().eos_class
-
-        # Store loss weights
-        self.ctc_weight = ctc_weight
-        self.ce_weight = ce_weight
 
         # Embedding for EMG data
         self.embedding = nn.Sequential(
@@ -666,11 +660,9 @@ class ConformerTransducerModule(pl.LightningModule):
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
-        self.eos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
 
         # Initialize special embeddings with Xavier/Glorot
         nn.init.xavier_normal_(self.sos_embedding)
-        nn.init.xavier_normal_(self.eos_embedding)
 
         # Positional encoding for encoder
         self.encoder_pos_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
@@ -710,8 +702,8 @@ class ConformerTransducerModule(pl.LightningModule):
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class, zero_infinity=True)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
 
-        # Beam search decoder
-        self.beam_decoder = instantiate(decoder)
+        # Beam search decoder (currently disabled; using greedy search instead)
+        # self.beam_decoder = instantiate(decoder)
 
         # Character error rate metrics
         metrics = MetricCollection([CharacterErrorRates()])
@@ -771,17 +763,14 @@ class ConformerTransducerModule(pl.LightningModule):
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
             # Add EOS tokens to targets for training
-            targets_with_eos, target_lengths_with_eos = self._prepare_targets_for_training(
-                targets, target_lengths)
-
             batch_size = encoder_outputs.size(1)
 
             # Start with the learned SOS embedding
             sos_tokens = self.sos_embedding.expand(-1, batch_size, -1)
 
             # Convert target tokens to embeddings
-            if targets_with_eos.size(0) > 1:
-                target_emb = self.decoder_embedding(targets_with_eos[:-1])
+            if targets.size(0) > 1:
+                target_emb = self.decoder_embedding(targets[:-1])
                 decoder_inputs = torch.cat([sos_tokens, target_emb], dim=0)
             else:
                 decoder_inputs = sos_tokens
@@ -792,11 +781,17 @@ class ConformerTransducerModule(pl.LightningModule):
             # Create causal mask
             tgt_mask = self._generate_square_subsequent_mask(decoder_inputs.size(0)).to(device)
 
-            # Run decoder
+            # Create key padding mask using target_lengths
+            # The decoder_inputs has shape (T_tgt, N) where T_tgt = targets[:-1] concatenated with SOS, so total length equals targets.size(0)
+            T_tgt = decoder_inputs.size(0)
+            tgt_key_padding_mask = torch.arange(T_tgt, device=device).unsqueeze(0).expand(batch_size, T_tgt) > target_lengths.unsqueeze(1)
+
+            # Run decoder with both causal mask and key padding mask
             decoder_outputs = self.transformer_decoder(
                 tgt=decoder_inputs,
                 memory=encoder_outputs,
-                tgt_mask=tgt_mask
+                tgt_mask=tgt_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask
             )
 
             # Project to vocabulary
@@ -806,7 +801,7 @@ class ConformerTransducerModule(pl.LightningModule):
         else:
             # Inference mode
             batch_size = encoder_outputs.size(1)
-            max_len = 100
+            max_len = 50
 
             # Start with the learned SOS embedding
             decoder_input = torch.full((1, batch_size), self.sos_token_id,
@@ -861,81 +856,54 @@ class ConformerTransducerModule(pl.LightningModule):
             "decoder_log_probs": decoder_log_probs
         }
 
-    def _prepare_targets_for_training(self, targets, target_lengths):
-        """
-        Prepares target sequences for training by adding EOS tokens.
-
-        Args:
-            targets: Target tensor with shape (T, N)
-            target_lengths: Tensor of sequence lengths
-
-        Returns:
-            Tuple of (modified_targets, modified_target_lengths)
-        """
-        device = targets.device
-        batch_size = targets.size(1)
-
-        # Create a new tensor with space for EOS tokens
-        max_len = targets.size(0)
-        new_targets = torch.full((max_len+1, batch_size),
-                               charset().null_class,
-                               dtype=targets.dtype,
-                               device=device)
-
-        # Copy original targets
-        new_targets[:max_len] = targets
-
-        # Add EOS tokens at the end of each sequence
-        for i in range(batch_size):
-            new_targets[target_lengths[i], i] = self.eos_token_id
-
-        # Update target lengths to account for EOS tokens
-        new_target_lengths = target_lengths + 1
-
-        return new_targets, new_target_lengths
-
     def _step(self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs) -> torch.Tensor:
         inputs = batch["inputs"]
         targets = batch["targets"]
-        input_lengths = batch["input_lengths"]
         target_lengths = batch["target_lengths"]
-        N = len(input_lengths)
+        N = len(target_lengths)
 
-        # Forward pass
+        # Forward pass (for non-training, inference branch is used automatically)
         outputs = self.forward(inputs, targets, target_lengths)
 
-        # CTC loss
-        ctc_loss = self.ctc_loss(
-            log_probs=outputs["ctc_log_probs"],
-            targets=targets.transpose(0, 1),
-            input_lengths=input_lengths,
-            target_lengths=target_lengths,
-        )
+        if phase == "train":
+            # Compute cross-entropy loss (teacher-forcing mode)
+            # decoder_logits shape: (T, N, C) -> transpose to (N, T, C)
+            decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T, C)
+            targets_t = targets.transpose(0, 1)  # (N, T)
 
-        # Cross-entropy loss (for decoder)
-        decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T, C)
-        targets_t = targets.transpose(0, 1)  # (N, T)
+            # Use decoder outputs from index 1 onward to predict the next token
+            ce_logits = decoder_logits[:, 1:, :]  # (N, T-1, C)
+            ce_targets = targets_t[:, 1:]  # (N, T-1)
 
-        # Flatten for cross-entropy
-        ce_logits = decoder_logits.reshape(-1, charset().num_classes)
-        ce_targets = targets_t.reshape(-1)
+            # Flatten for cross-entropy
+            ce_logits = ce_logits.reshape(-1, charset().num_classes)
+            ce_targets = ce_targets.reshape(-1)
 
-        ce_loss = self.ce_loss(ce_logits, ce_targets)
+            ce_loss = self.ce_loss(ce_logits, ce_targets)
+            loss = self.ce_weight * ce_loss
 
-        # Combined loss
-        loss = self.ctc_weight * ctc_loss + self.ce_weight * ce_loss
+            self.log(f"{phase}/ce_loss", ce_loss, batch_size=N, sync_dist=True)
+        else:
+            # For validation (or test), skip cross-entropy loss computation due to variable output lengths
+            loss = torch.tensor(0.0, device=inputs.device)
 
-        # Log losses
-        self.log(f"{phase}/ctc_loss", ctc_loss, batch_size=N, sync_dist=True)
-        self.log(f"{phase}/ce_loss", ce_loss, batch_size=N, sync_dist=True)
         self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
 
-        # Decode for metrics using beam search
-        predictions = self.beam_decoder.decode_batch(
-            emissions=outputs["decoder_log_probs"].detach().cpu().numpy(),
-            emission_lengths=torch.ones_like(input_lengths).detach().cpu().numpy() * outputs["decoder_log_probs"].size(
-                0),
-        )
+        # Greedy decoding for metrics
+        # Obtain predicted tokens from decoder_log_probs (shape: T x N)
+        greedy_preds = torch.argmax(outputs["decoder_log_probs"], dim=-1)  # (T, N)
+        greedy_preds = greedy_preds.detach().cpu().numpy()
+
+        # For each sample, trim the prediction at the first occurrence of the EOS token
+        predictions = []
+        eos_token = self.eos_token_id
+        T, N = greedy_preds.shape
+        for i in range(N):
+            pred_seq = greedy_preds[:, i].tolist()
+            if eos_token in pred_seq:
+                eos_index = pred_seq.index(eos_token)
+                pred_seq = pred_seq[:eos_index + 1]
+            predictions.append(pred_seq)
 
         # Update metrics
         metrics = self.metrics[f"{phase}_metrics"]
