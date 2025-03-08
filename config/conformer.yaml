@@ -4,6 +4,7 @@ defaults:
   - model: conformer_decoder
   - optimizer: adam
   - lr_scheduler: linear_warmup_cosine_annealing
+  - decoder: None
   - cluster: local
   - _self_
 
