@@ -50,8 +50,8 @@ class ConformerCTCModule(pl.LightningModule):
         # Embedding for EMG data
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
         self.embedding = nn.Sequential(
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
-            SubsampleConvModule(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS, kernel_size=3, dropout=dropout),
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (N, 2, T, 96) (T, N, 2, 16, 6)
+            SubsampleConvModule(channels=2, kernel_size=3, dropout=dropout, stride=1), # TODO: figure out better way than setting stride to 1
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
