@@ -13,6 +13,6 @@ module:
   dropout: 0.1
 
 datamodule:
-  _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  _target_: emg2qwerty.conformer_lightning.WindowedEMGDataModule
   window_length: 8000  # 4 sec windows for 2kHz EMG
   padding: [0, 0]  # No padding, [1800, 200]  # 900ms past context, 100ms future context
