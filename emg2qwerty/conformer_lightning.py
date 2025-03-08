@@ -11,8 +11,10 @@ import math
 import torch
 import pytorch_lightning as pl
 from hydra.utils import instantiate
+from numpy.ma.core import zeros_like
 from omegaconf import DictConfig
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader
 from torchmetrics import MetricCollection
 
@@ -272,6 +274,32 @@ class ConformerBlock(nn.Module):
         return x
 
 
+class SubsampleConvModule(nn.Module):
+    def __init__(self, channels: int, kernel_size: int, stride: int = 2, dropout: float = 0.1) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=kernel_size, stride=stride)
+        self.batch_norm1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=kernel_size, stride=stride)
+        self.batch_norm2 = nn.BatchNorm2d(channels)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T, N, _, Freq, Bins = x.shape  # (T, N, 2, Freq, Bins)
+        # Conv input (N, 2, T, -1)
+        x = x.permute(1, 2, 0, 3, 4).reshape(N, 2, T, Freq * Bins)
+        x = self.conv1(x)
+        x = self.batch_norm1(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.batch_norm2(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        # reshape back to (T, N, 2, Freq, Bins)
+        x = x.reshape(N, 2, -1, Freq, Bins).permute(2, 0, 1, 3, 4)
+        return x
+
+
 class ConformerCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
@@ -303,12 +331,13 @@ class ConformerCTCModule(pl.LightningModule):
         # Embedding for EMG data
         # Input shape: (T, N, bands=2, electrode_channels=16, freq)
         self.embedding = nn.Sequential(
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
+            SubsampleConvModule(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS, kernel_size=3, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
-            ),
+            ),  # (T, N, 2, mlp_features)
             # Flatten over the bands and channel dimensions
             nn.Flatten(start_dim=2),
             # Project to model dimension
@@ -391,28 +420,7 @@ class ConformerCTCModule(pl.LightningModule):
             target_lengths=target_lengths,  # (N,)
         )
 
-        ce_loss = torch.zeros().to(emissions.device)
-        # CE loss - fix the shape mismatch
-        # First transpose to (N, T, C)
-        emissions_t = emissions.transpose(0, 1)
-
-        # # Create a mask for valid positions based on input lengths
-        # mask = torch.arange(emissions.size(0)).unsqueeze(0).to(inputs.device) < input_lengths.unsqueeze(1)
-        #
-        # # Flatten only valid positions for both logits and targets
-        # ce_logits = []
-        # ce_targets = []
-        #
-        # # TODO: optimize loop & fix padding
-        # for i in range(N):
-        #     valid_len = min(input_lengths[i], targets.size(0))
-        #     ce_logits.append(emissions_t[i, :valid_len])
-        #     ce_targets.append(targets[:valid_len, i])
-        #
-        # ce_logits = torch.cat(ce_logits, dim=0)  # Shape: (sum(valid_lengths), C)
-        # ce_targets = torch.cat(ce_targets, dim=0)  # Shape: (sum(valid_lengths))
-        #
-        # ce_loss = self.ce_loss(ce_logits, ce_targets)
+        ce_loss = 0
 
         # Combined loss
         loss = self.ctc_weight * ctc_loss + self.ce_weight * ce_loss
