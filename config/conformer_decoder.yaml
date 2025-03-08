@@ -1,16 +1,16 @@
 defaults:
   - user: single_user
   - transforms: log_spectrogram
-  - model: conformer_ctc
+  - model: conformer_decoder
   - optimizer: adam
-  - lr_scheduler: linear_warmup_cosine_annealing
-  - decoder: ctc_greedy  # UNUSED (placeholder)
+  - lr_scheduler: cosine_annealing
+  - decoder: ctc_greedy
   - cluster: local
   - _self_
 
 seed: 1501
-batch_size: 128
-num_workers: 4  # Number of workers for dataloading
+batch_size: 512
+num_workers: 8  # Number of workers for dataloading
 train: True  # Whether to train or only run validation and test
 checkpoint: null  # Optional path to checkpoint file
 monitor_metric: val/CER
@@ -20,7 +20,7 @@ trainer:
   accelerator: gpu
   devices: 1
   num_nodes: 1
-  max_epochs: 150
+  max_epochs: 30
   default_root_dir: ${hydra:runtime.output_dir}
 
 callbacks:
