@@ -324,14 +324,15 @@ class ConformerDecoder(pl.LightningModule):
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
-            nn.Linear(mlp_features[-1], d_model)
+            nn.Flatten(start_dim=2),
+            nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
         )
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
 
-        # Band embedding
-        self.band_embedding = nn.Embedding(self.NUM_BANDS, d_model)
+        # # Band embedding
+        # self.band_embedding = nn.Embedding(self.NUM_BANDS, d_model)
 
         # Initialize special embeddings with Xavier/Glorot
         nn.init.xavier_normal_(self.sos_embedding)
@@ -351,9 +352,6 @@ class ConformerDecoder(pl.LightningModule):
             ) for _ in range(num_encoder_layers)
         ])
 
-        # CTC projection layer (for auxiliary CTC loss)
-        self.ctc_proj = nn.Linear(d_model, charset().num_classes)
-
         # Decoder embedding and positional encoding
         self.decoder_embedding = nn.Embedding(charset().num_classes, d_model)
         self.decoder_pos_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
@@ -371,7 +369,6 @@ class ConformerDecoder(pl.LightningModule):
         self.output_proj = nn.Linear(d_model, charset().num_classes)
 
         # Loss functions
-        self.ctc_loss = nn.CTCLoss(blank=charset().null_class, zero_infinity=True)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
 
         # Beam search decoder (currently disabled; using greedy search instead)
@@ -399,11 +396,12 @@ class ConformerDecoder(pl.LightningModule):
 
         # Embed Inputs
         x = self.embedding(inputs)  # (T, N, 2, d_model)
-        band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
-        band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
-        band1 = band1 + self.band_embedding(torch.zeros(1, 1, dtype=torch.long, device=inputs.device))
-        band2 = band2 + self.band_embedding(torch.ones(1, 1, dtype=torch.long, device=inputs.device))
-        x = torch.cat([band1, band2], dim=0)  # (T * 2, N, d_model)
+        x = self.encoder_pos_encoding(x)
+        # band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
+        # band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
+        # band1 = band1 + self.band_embedding(torch.zeros(1, 1, dtype=torch.long, device=inputs.device))
+        # band2 = band2 + self.band_embedding(torch.ones(1, 1, dtype=torch.long, device=inputs.device))
+        # x = torch.cat([band1, band2], dim=0)  # (T * 2, N, d_model)
 
         # Pass through Conformer blocks
         for block in self.conformer_blocks:
@@ -432,10 +430,6 @@ class ConformerDecoder(pl.LightningModule):
         """
         device = inputs.device
         encoder_outputs = self.encode(inputs)  # (T, N, d_model)
-
-        # CTC outputs (auxiliary)
-        encoder_logits = self.ctc_proj(encoder_outputs)  # (T, N, num_classes)
-        ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
 
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
@@ -527,8 +521,6 @@ class ConformerDecoder(pl.LightningModule):
             decoder_log_probs = nn.functional.log_softmax(decoder_logits, dim=-1)
 
         return {
-            "ctc_logits": encoder_logits,
-            "ctc_log_probs": ctc_log_probs,
             "decoder_logits": decoder_logits,
             "decoder_log_probs": decoder_log_probs
         }
