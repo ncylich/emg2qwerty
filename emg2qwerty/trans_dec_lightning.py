@@ -351,8 +351,9 @@ class TransformerEncoderDecoder(pl.LightningModule):
             nhead: int,
             num_encoder_layers: int,
             num_decoder_layers: int,
-            dim_feedforward: int = 2048,
+            feedforward_mult: int = 2,
             dropout: float = 0.1,
+            ctc_loss_weight: float = 0.5,
             sos_token_id: int = None,
             eos_token_id: int = None,
             optimizer: DictConfig = None,
@@ -394,12 +395,11 @@ class TransformerEncoderDecoder(pl.LightningModule):
             d_model=d_model,
             nhead=nhead,
             num_layers=num_encoder_layers,
-            dim_feedforward=dim_feedforward,
+            dim_feedforward=d_model * feedforward_mult,
             dropout=dropout
         )
 
-        # CTC projection layer (auxiliary)
-        self.ctc_proj = nn.Linear(d_model, charset().num_classes)
+        self.ctc_proj = nn.Linear(2 * d_model, charset().num_classes)
 
         # Decoder embedding
         self.decoder_embedding = nn.Embedding(charset().num_classes, d_model)
@@ -409,7 +409,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
             d_model=d_model,
             nhead=nhead,
             num_layers=num_decoder_layers,
-            dim_feedforward=dim_feedforward,
+            dim_feedforward=d_model * feedforward_mult,
             dropout=dropout
         )
 
@@ -419,6 +419,10 @@ class TransformerEncoderDecoder(pl.LightningModule):
         # Loss functions
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class, zero_infinity=True)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
+
+        assert 0 <= ctc_loss_weight <= 1
+        self.ctc_loss_weight = ctc_loss_weight
+        self.ce_loss_weight = 1 - ctc_loss_weight
 
         # Character error rate metrics
         metrics = MetricCollection([CharacterErrorRates()])
@@ -470,8 +474,9 @@ class TransformerEncoderDecoder(pl.LightningModule):
         device = inputs.device
         encoder_outputs = self.encode(inputs)  # (T, N, d_model)
 
-        # CTC outputs (auxiliary)
-        encoder_logits = self.ctc_proj(encoder_outputs)  # (T, N, num_classes)
+        T, N, D = encoder_outputs.size()
+        encoder_logit_outputs = encoder_outputs.reshape(T // 2, N, 2 * D)
+        encoder_logits = self.ctc_proj(encoder_logit_outputs)
         ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
 
         # Handle decoder outputs based on training or inference
@@ -572,6 +577,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
     def _step(self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs) -> torch.Tensor:
         inputs = batch["inputs"]
         targets = batch["targets"]
+        input_lengths = batch["input_lengths"]
         target_lengths = batch["target_lengths"]
         N = len(target_lengths)
 
@@ -579,19 +585,30 @@ class TransformerEncoderDecoder(pl.LightningModule):
         outputs = self.forward(inputs, targets, target_lengths)
 
         if phase == "train":
-            # Compute cross-entropy loss (teacher-forcing mode)
-            decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T, C)
             targets_t = targets.transpose(0, 1)  # (N, T)
 
+            # Compute CTC loss
+            ctc_logits = outputs["ctc_log_probs"]
+            ctc_loss = self.ctc_loss(
+                log_probs=ctc_logits,
+                targets=targets_t,
+                input_lengths=input_lengths,
+                target_lengths=target_lengths
+            )
+
+            # Compute cross-entropy loss (teacher-forcing mode)
+            decoder_logits = outputs["decoder_logits"]  # (T, N, C)
+
             # Use decoder outputs from index 1 onward to predict the next token
-            ce_logits = decoder_logits[:, 1:, :]  # (N, T-1, C)
+            ce_logits = decoder_logits[1:, :, :]  # (T-1, N, C)
             ce_targets = targets_t[:, 1:]  # (N, T-1)
 
             # Flatten for cross-entropy
             ce_logits = ce_logits.reshape(-1, charset().num_classes)
             ce_targets = ce_targets.reshape(-1)
+            ce_loss = self.ce_loss(ce_logits, ce_targets)
 
-            loss = self.ce_loss(ce_logits, ce_targets)
+            loss = self.ctc_loss_weight * ctc_loss + self.ce_loss_weight * ce_loss
         else:
             # For validation/test
             loss = torch.tensor(0.0, device=inputs.device)

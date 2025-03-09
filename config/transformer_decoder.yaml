@@ -13,7 +13,7 @@ weight_decay: 1e-5
 
 seed: 1501
 batch_size: 128
-num_workers: 8  # Number of workers for dataloading
+num_workers: 2  # Number of workers for dataloading
 train: True  # Whether to train or only run validation and test
 checkpoint: null  # Optional path to checkpoint file
 monitor_metric: val/CER
