@@ -374,13 +374,16 @@ class TransformerEncoderDecoder(pl.LightningModule):
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
-            nn.Flatten(start_dim=2),
-            nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model),
+            nn.Linear(mlp_features[-1], d_model),
         )
 
         # Special token embeddings
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
         nn.init.xavier_normal_(self.sos_embedding)
+
+        # Band Embedding
+        self.band_embedding = nn.Embedding(self.NUM_BANDS, d_model)
+        nn.init.xavier_normal_(self.band_embedding.weight)
 
         # Positional encoding for encoder and decoder
         self.encoder_pos_encoding = PositionalEncoding(d_model=d_model, dropout=dropout)
@@ -433,8 +436,12 @@ class TransformerEncoderDecoder(pl.LightningModule):
     def encode(self, inputs: torch.Tensor) -> torch.Tensor:
         """Encode input EMG data with the transformer encoder"""
         # Embed inputs
-        x = self.embedding(inputs)  # (T, N, d_model)
-        x = self.encoder_pos_encoding(x)
+        x = self.embedding(inputs)  # (T, N, 2, d_model)
+        band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
+        band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
+        band1 = band1 + self.band_embedding(torch.zeros(1, 1, dtype=torch.long, device=inputs.device))
+        band2 = band2 + self.band_embedding(torch.ones(1, 1, dtype=torch.long, device=inputs.device))
+        x = torch.cat([band1, band2], dim=0)  # (T * 2, N, d_model)
 
         # Pass through transformer encoder
         x = self.transformer_encoder(x)
