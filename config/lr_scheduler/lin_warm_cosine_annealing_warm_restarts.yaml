@@ -1,0 +1,11 @@
+# @package _global_
+lr_scheduler:
+  scheduler:
+    _target_: scheduler.LinearWarmupCosineAnnealingWarmRestarts
+    warmup_epochs: 10
+    T_0: 25
+    T_mult: 2
+    warmup_start_lr: 1e-8
+    eta_min: 1e-6
+    max_epochs: ${trainer.max_epochs}
+  interval: epoch

@@ -8,6 +8,9 @@ defaults:
   - cluster: local
   - _self_
 
+lr: 5e-4
+weight_decay: 1e-5
+
 seed: 1501
 batch_size: 128
 num_workers: 8  # Number of workers for dataloading
