@@ -362,6 +362,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+        d_ffn = int(d_model * feedforward_mult)
 
         self.sos_token_id = sos_token_id if sos_token_id is not None else charset().sos_class
         self.eos_token_id = eos_token_id if eos_token_id is not None else charset().eos_class
@@ -395,7 +396,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
             d_model=d_model,
             nhead=nhead,
             num_layers=num_encoder_layers,
-            dim_feedforward=d_model * feedforward_mult,
+            dim_feedforward=d_ffn,
             dropout=dropout
         )
 
@@ -409,7 +410,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
             d_model=d_model,
             nhead=nhead,
             num_layers=num_decoder_layers,
-            dim_feedforward=d_model * feedforward_mult,
+            dim_feedforward=d_ffn,
             dropout=dropout
         )
 
@@ -474,11 +475,15 @@ class TransformerEncoderDecoder(pl.LightningModule):
         device = inputs.device
         encoder_outputs = self.encode(inputs)  # (T, N, d_model)
 
-        T, N, D = encoder_outputs.size()
-        encoder_logit_outputs = encoder_outputs.reshape(T // 2, N, 2 * D)
-        encoder_logits = self.ctc_proj(encoder_logit_outputs)
-        ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
-
+        if self.ctc_loss_weight > 0:
+            T, N, D = encoder_outputs.size()
+            encoder_logit_outputs = encoder_outputs.reshape(T // 2, N, 2 * D)
+            encoder_logits = self.ctc_proj(encoder_logit_outputs)
+            ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
+        else:
+            encoder_logits = None
+            ctc_log_probs = None
+        
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
             # Add EOS tokens to targets for training
@@ -587,20 +592,23 @@ class TransformerEncoderDecoder(pl.LightningModule):
         if phase == "train":
             targets_t = targets.transpose(0, 1)  # (N, T)
 
-            # Compute CTC loss
-            ctc_logits = outputs["ctc_log_probs"]
-            ctc_loss = self.ctc_loss(
-                log_probs=ctc_logits,
-                targets=targets_t,
-                input_lengths=input_lengths,
-                target_lengths=target_lengths
-            )
+            if self.ctc_loss_weight > 0:
+                # Compute CTC loss
+                ctc_logits = outputs["ctc_log_probs"]
+                ctc_loss = self.ctc_loss(
+                    log_probs=ctc_logits,
+                    targets=targets_t,
+                    input_lengths=input_lengths,
+                    target_lengths=target_lengths
+                )
+            else:
+                ctc_loss = 0
 
             # Compute cross-entropy loss (teacher-forcing mode)
-            decoder_logits = outputs["decoder_logits"]  # (T, N, C)
+            decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T-1, C)
 
             # Use decoder outputs from index 1 onward to predict the next token
-            ce_logits = decoder_logits[1:, :, :]  # (T-1, N, C)
+            ce_logits = decoder_logits[:, 1:, :]  # (N, T-1, C)
             ce_targets = targets_t[:, 1:]  # (N, T-1)
 
             # Flatten for cross-entropy
