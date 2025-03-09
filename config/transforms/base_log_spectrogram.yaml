@@ -15,7 +15,7 @@ temporal_jitter:
 
 logspec:
   _target_: emg2qwerty.transforms.LogSpectrogram
-  n_fft: 30 # IF YOU CHANGE THIS YOU MUST ALSO CHANGE in_features in conformer_decoder_ce.yaml
+  n_fft: 64 # IF YOU CHANGE THIS YOU MUST ALSO CHANGE in_features in conformer_decoder_ce.yaml
   hop_length: 16  # Downsamples from 2kHz to 125Hz
 
 specaug:
