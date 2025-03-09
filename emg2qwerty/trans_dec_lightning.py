@@ -26,6 +26,69 @@ from emg2qwerty.modules import (
 )
 from emg2qwerty.transforms import Transform, LogFreqBinsSpectrogram
 
+import math
+import torch
+import torch.nn as nn
+
+
+class DctLogSpectogram(nn.Module):
+    """
+    Computes log spectrogram features from input signals by applying a DCT
+    along the frequency axis. Expects inputs of shape (T, N, bands, C, F)
+    and returns outputs of shape (T, N, bands, C, freq), where it is assumed
+    that bands==2 and C==16.
+
+    Args:
+        n_dct (int): Window size for unfolding along frequency axis.
+                     Also the size of the DCT window.
+        hop_length (int): Step size for unfolding.
+        log_offset (float): Small constant added for numerical stability.
+    """
+
+    def __init__(
+            self,
+            n_dct: int = 64,
+            hop_length: int = 32,
+            log_offset: float = 1e-6,
+    ) -> None:
+        super().__init__()
+        self.n_dct = n_dct
+        self.hop_length = hop_length
+        self.log_offset = log_offset
+
+        self._initialize_combined_dct_hann_matrix()
+
+    def _initialize_combined_dct_hann_matrix(self) -> None:
+        n = self.n_dct
+        dct_mat = torch.empty(n, n)
+        for k in range(n):
+            for i in range(n):
+                dct_mat[k, i] = math.cos(math.pi * k * (2 * i + 1) / (2 * n))
+        dct_mat[0] *= 1.0 / math.sqrt(n)
+        dct_mat[1:] *= math.sqrt(2.0 / n)
+        combined_dct_hann = dct_mat * torch.hann_window(n).unsqueeze(1)  # Same as diag(window) @ dct_mat
+        self.register_buffer("combined_dct_hann", combined_dct_hann)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            inputs (torch.Tensor): Tensor of shape (T, N, bands, C, F)
+        Returns:
+            torch.Tensor: Tensor of shape (T, N, bands, C, freq)
+        """
+        permuted_inputs = inputs.movedim(0, -1)
+        x_unfold = permuted_inputs.unfold(dimension=-1, size=self.n_dct, step=self.hop_length)
+
+        # Combined windowing & DCT mult
+        dct_coeffs = torch.matmul(x_unfold, self.combined_dct_hann)
+
+        # Energy + log
+        spec = dct_coeffs.pow(2)
+        logspec = torch.log10(spec + self.log_offset)
+
+        permuted_logspec = logspec.permute(-2, 0, 1, 2, -1)
+        return permuted_logspec
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(
             self,
@@ -304,6 +367,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
 
         # Embedding for EMG data
         self.embedding = nn.Sequential(
+            # DctLogSpectogram(n_dct=in_features // self.ELECTRODE_CHANNELS, hop_length=16),  # for dct_log_spectrogram
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
