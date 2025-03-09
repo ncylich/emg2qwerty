@@ -605,10 +605,10 @@ class TransformerEncoderDecoder(pl.LightningModule):
                 ctc_loss = 0
 
             # Compute cross-entropy loss (teacher-forcing mode)
-            decoder_logits = outputs["decoder_logits"]  # (T, N, C)
+            decoder_logits = outputs["decoder_logits"].transpose(0, 1)  # (N, T-1, C)
 
             # Use decoder outputs from index 1 onward to predict the next token
-            ce_logits = decoder_logits[1:, :, :]  # (T-1, N, C)
+            ce_logits = decoder_logits[:, 1:, :]  # (N, T-1, C)
             ce_targets = targets_t[:, 1:]  # (N, T-1)
 
             # Flatten for cross-entropy
