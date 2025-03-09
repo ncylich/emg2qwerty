@@ -9,6 +9,7 @@ module:
   num_decoder_layers: 2
   feedforward_mult: 1
   dropout: 0.1
+  ctc_loss_weight: 0.25
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule
