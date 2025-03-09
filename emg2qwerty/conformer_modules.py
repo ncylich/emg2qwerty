@@ -281,3 +281,29 @@ class SubsampleConvModule(nn.Module):
         # reshape back to (T, N, 2, Freq, Bins)
         x = x.reshape(N, 2, -1, Freq, Bins).permute(2, 0, 1, 3, 4)
         return x
+
+class MlpSubsampleConvModule(nn.Module):
+    def __init__(self, channels: int, kernel_size: int, stride: int = 2, dropout: float = 0.1) -> None:
+        super().__init__()
+        padding = (kernel_size - 1) // 2
+        self.conv1 = nn.Conv2d(channels, channels * 2, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.batch_norm1 = nn.BatchNorm2d(channels * 2)
+        self.conv2 = nn.Conv2d(channels * 2, channels * 4, kernel_size=kernel_size, stride=stride, padding=padding)
+        self.batch_norm2 = nn.BatchNorm2d(channels * 4)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T, N, _, Freq = x.shape  # (T, N, 2, Freq)
+        # Conv input (N, 2, T, -1)
+        x = x.permute(1, 2, 0, 3)
+        x = self.conv1(x)
+        x = self.batch_norm1(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = self.batch_norm2(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        # reshape back to (T // 4, N, 2, F)
+        x = x.reshape(N, 2, -1, Freq).permute(2, 0, 1, 3)
+        return x

@@ -23,7 +23,8 @@ from torchmetrics import MetricCollection
 from emg2qwerty import utils
 from emg2qwerty.ce_charset import charset
 from emg2qwerty.ce_data import LabelData, WindowedEMGDataset
-from emg2qwerty.conformer_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish
+from emg2qwerty.conformer_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish, \
+    MlpSubsampleConvModule
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
@@ -311,22 +312,17 @@ class ConformerDecoder(pl.LightningModule):
 
         # Embedding for EMG data
         self.embedding = nn.Sequential(
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
-            SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
+            SubsampleConvModule(channels=2, kernel_size=7, stride=2, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
-            ),
+            ),  # (T, N, 2, mlp_features)
+            # MlpSubsampleConvModule(channels=2, kernel_size=3, dropout=dropout),
             nn.Flatten(start_dim=2),
             nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model),
         )
-        # self.embedding = nn.Sequential(
-        #     SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
-        #     SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
-        #     nn.Flatten(start_dim=2),
-        #     nn.Linear(self.NUM_BANDS * self.ELECTRODE_CHANNELS * LogFreqBinsSpectrogram.n_mels, d_model),
-        # )
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
