@@ -1,7 +1,7 @@
 # @package _global_
 module:
   _target_: emg2qwerty.trans_dec_lightning.TransformerEncoderDecoder
-  in_features: 96  # freq * n_mels
+  in_features: 256  # LOG_SPECTROGRAM: n_mels * number of electrodes (16); BASE_LOG_SPECTROGRAM: (n_fft // 2 + 1) * number of electrodes (16)
   mlp_features: [256]
   d_model: 128
   nhead: 2
