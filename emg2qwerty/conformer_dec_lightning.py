@@ -30,6 +30,7 @@ from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
     SpectrogramNorm,
     TDSConvEncoder,
+    PermuteReshape,
 )
 from emg2qwerty.transforms import Transform, LogFreqBinsSpectrogram
 
@@ -318,14 +319,22 @@ class ConformerDecoder(pl.LightningModule):
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
-            ),  # (T, N, 2, mlp_features)
-            # MlpSubsampleConvModule(channels=2, kernel_size=3, dropout=dropout),
-            nn.Flatten(start_dim=2),
-            nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model),
+            ),
+            nn.Linear(mlp_features[-1], d_model)
         )
+
+        # self.embedding = nn.Sequential(
+        #     SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+        #     SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
+        #     nn.Flatten(start_dim=2),
+        #     nn.Linear(self.NUM_BANDS * self.ELECTRODE_CHANNELS * LogFreqBinsSpectrogram.n_mels, d_model),
+        # )
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+
+        # Band embedding
+        self.band_embedding = nn.Embedding(self.NUM_BANDS, d_model)
 
         # Initialize special embeddings with Xavier/Glorot
         nn.init.xavier_normal_(self.sos_embedding)
@@ -387,8 +396,12 @@ class ConformerDecoder(pl.LightningModule):
     def encode(self, inputs: torch.Tensor) -> torch.Tensor:
         """Encode input EMG data with the conformer encoder"""
         # Embed inputs
-        x = self.embedding(inputs)  # (T, N, d_model)
-        x = self.encoder_pos_encoding(x)
+        x = self.embedding(inputs)  # (T, N, 2, d_model)
+        band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
+        band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
+        band1 = band1 + self.band_embedding(torch.zeros(1, 1, dtype=torch.long, device=inputs.device))
+        band2 = band2 + self.band_embedding(torch.ones(1, 1, dtype=torch.long, device=inputs.device))
+        x = torch.cat([band1, band2], dim=0)  # (T * 2, N, d_model)
 
         # Pass through Conformer blocks
         for block in self.conformer_blocks:
@@ -581,6 +594,7 @@ class ConformerDecoder(pl.LightningModule):
 
             target = LabelData.from_labels(filtered_target)
             prediction = LabelData.from_labels(filtered_prediction)
+            # print(f"Target: {target.text}\tPrediction: {prediction.text}")
             metrics.update(prediction=prediction, target=target)
 
         self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)

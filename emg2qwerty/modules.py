@@ -169,6 +169,29 @@ class MultiBandRotationInvariantMLP(nn.Module):
         return torch.stack(outputs_per_band, dim=self.stack_dim)
 
 
+# permute and reshape module
+class PermuteReshape(nn.Module):
+    """A `torch.nn.Module` that permutes and reshapes the input tensor
+    to the desired shape.
+
+    Args:
+        permutation (tuple): Permutation of the dimensions.
+        end_dim (tuple): the target dimension index that each original dimension should end up at.
+    """
+
+    def __init__(self, permutation: tuple[int], end_dim: tuple[int]) -> None:
+        super().__init__()
+        self.permutation = permutation
+        self.out_shape_map = torch.zeros(len(end_dim), max(end_dim), dtype=torch.int)
+        for i, dim in enumerate(end_dim):
+            self.out_shape_map[i, dim] = 1
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        shape = torch.tensor(inputs.shape) @ self.out_shape_map
+        permuted = inputs.permute(*self.permutation)
+        return permuted.reshape(shape.tolist())
+
+
 class TDSConv2dBlock(nn.Module):
     """A 2D temporal convolution block as per "Sequence-to-Sequence Speech
     Recognition with Time-Depth Separable Convolutions, Hannun et al"
