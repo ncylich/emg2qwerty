@@ -1,9 +1,10 @@
 defaults:
   - user: triple_user
-  - transforms: log_spectrogram
+  - transforms: base_log_spectrogram
   - model: conformer_decoder_ce
   - optimizer: adam
   - lr_scheduler: linear_warmup_cosine_annealing
+#  - lr_scheduler: cosine_annealing_warm_restarts
   - decoder: ctc_greedy
   - cluster: local
   - _self_

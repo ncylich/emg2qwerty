@@ -14,10 +14,9 @@ temporal_jitter:
   max_offset: 120  # Max 60ms jitter for 2kHz EMG
 
 logspec:
-#  _target_: emg2qwerty.transforms.LogSpectrogram
   _target_: emg2qwerty.transforms.LogFreqBinsSpectrogram
   n_fft: 64
-#  hop_length: 16  # Downsamples from 2kHz to 125Hz
+  n_mels: 16 # IF YOU CHANGE THIS YOU MUST ALSO CHANGE in_features in conformer_decoder_ce.yaml
   hop_length: 40 # Downsamples from 2kHz to 50Hz
 
 specaug:
