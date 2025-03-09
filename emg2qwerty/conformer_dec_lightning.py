@@ -23,8 +23,8 @@ from torchmetrics import MetricCollection
 from emg2qwerty import utils
 from emg2qwerty.ce_charset import charset
 from emg2qwerty.ce_data import LabelData, WindowedEMGDataset
-from emg2qwerty.conformer_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish, \
-    MlpSubsampleConvModule
+from emg2qwerty.custom_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish, \
+    MlpSubsampleConvModule, DctLogSpectrogram, SpecAugment
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
@@ -299,6 +299,7 @@ class ConformerDecoder(pl.LightningModule):
             ff_expansion_factor: int = 4,
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
+            # hop_length: int: = 16,
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
             optimizer: DictConfig = None,
@@ -311,6 +312,9 @@ class ConformerDecoder(pl.LightningModule):
         self.sos_token_id = sos_token_id if sos_token_id is not None else charset().sos_class
         self.eos_token_id = eos_token_id if eos_token_id is not None else charset().eos_class
 
+        # self.spectrogram = DctLogSpectrogram(n_dct=30, hop_length=hop_length)
+        # self.spec_augment = SpecAugment(n_time_masks=3, time_mask_param=25, n_freq_masks=2, freq_mask_param=4)
+
         # Embedding for EMG data
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
@@ -322,13 +326,6 @@ class ConformerDecoder(pl.LightningModule):
             ),
             nn.Linear(mlp_features[-1], d_model)
         )
-
-        # self.embedding = nn.Sequential(
-        #     SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
-        #     SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
-        #     nn.Flatten(start_dim=2),
-        #     nn.Linear(self.NUM_BANDS * self.ELECTRODE_CHANNELS * LogFreqBinsSpectrogram.n_mels, d_model),
-        # )
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
@@ -395,7 +392,12 @@ class ConformerDecoder(pl.LightningModule):
 
     def encode(self, inputs: torch.Tensor) -> torch.Tensor:
         """Encode input EMG data with the conformer encoder"""
-        # Embed inputs
+        # Prepare Inputs (if using DCT)
+        # x = self.spectrogram(inputs)
+        # if self.training:
+        #     x = self.spec_augment(x)
+
+        # Embed Inputs
         x = self.embedding(inputs)  # (T, N, 2, d_model)
         band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
         band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)

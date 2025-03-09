@@ -11,6 +11,7 @@ module:
   conv_kernel_size: 3
   conv_expansion_factor: 1
   dropout: 0.1
+#  hop_length: ${logspec.hop_length}
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule

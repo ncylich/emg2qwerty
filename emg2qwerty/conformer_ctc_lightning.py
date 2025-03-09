@@ -22,7 +22,7 @@ from emg2qwerty.modules import (
 )
 import math
 from emg2qwerty.transforms import Transform
-from emg2qwerty.conformer_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock
+from emg2qwerty.custom_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock
 
 
 class ConformerCTCModule(pl.LightningModule):

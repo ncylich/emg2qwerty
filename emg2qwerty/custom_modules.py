@@ -2,6 +2,8 @@ from collections.abc import Sequence
 
 import torch
 from torch import nn
+import torchaudio
+import numpy as np
 from typing import Optional
 import math
 import torch.nn.functional as F
@@ -10,6 +12,131 @@ import torch.nn.functional as F
 """
 CONFORMER_MODULES: Shared modules for the conformer-based models
 """
+
+
+class DctLogSpectrogram(nn.Module):
+    """
+    Computes log spectrogram features from input signals by applying a DCT
+    along the frequency axis. Expects inputs of shape (T, N, bands, C, F)
+    and returns outputs of shape (T, N, bands, C, freq), where it is assumed
+    that bands==2 and C==16.
+
+    Args:
+        n_dct (int): Window size for unfolding along frequency axis.
+                     Also the size of the DCT window.
+        hop_length (int): Step size for unfolding.
+        log_offset (float): Small constant added for numerical stability.
+    """
+
+    def __init__(
+            self,
+            n_dct: int = 64,
+            hop_length: int = 16,
+            log_offset: float = 1e-6,
+    ) -> None:
+        super().__init__()
+        self.n_dct = n_dct
+        self.hop_length = hop_length
+        self.log_offset = log_offset
+
+        self._initialize_combined_dct_hann_matrix()
+
+    def _initialize_combined_dct_hann_matrix(self) -> None:
+        n = self.n_dct
+        dct_mat = torch.empty(n, n)
+        for k in range(n):
+            for i in range(n):
+                dct_mat[k, i] = math.cos(math.pi * k * (2 * i + 1) / (2 * n))
+        dct_mat[0] *= 1.0 / math.sqrt(n)
+        dct_mat[1:] *= math.sqrt(2.0 / n)
+        combined_dct_hann = dct_mat * torch.hann_window(n).unsqueeze(1)  # Same as diag(window) @ dct_mat
+        self.register_buffer("combined_dct_hann", combined_dct_hann)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            inputs (torch.Tensor): Tensor of shape (T, N, bands, C, F)
+        Returns:
+            torch.Tensor: Tensor of shape (T, N, bands, C, freq)
+        """
+        permuted_inputs = inputs.movedim(0, -1)
+        x_unfold = permuted_inputs.unfold(dimension=-1, size=self.n_dct, step=self.hop_length)
+
+        # Combined windowing & DCT mult
+        dct_coeffs = torch.matmul(x_unfold, self.combined_dct_hann)
+
+        # Energy + log
+        spec = dct_coeffs.pow(2)
+        logspec = torch.log10(spec + self.log_offset)
+
+        permuted_logspec = logspec.permute(-2, 0, 1, 2, -1)
+        return permuted_logspec  # (T, N, bands, C, freq)
+
+
+class SpecAugment(nn.Module):
+    """
+    Applies time and frequency masking as described in
+    "SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition"
+    (https://arxiv.org/abs/1904.08779).
+
+    This module expects inputs of shape (T, N, bands, C, freq) and returns
+    outputs of the same shape.
+
+    Args:
+        n_time_masks (int): Maximum number of time masks to apply (default: 0).
+        time_mask_param (int): Maximum possible width of each time mask (default: 0).
+        iid_time_masks (bool): Whether to apply different time masks for each channel (default: True).
+        n_freq_masks (int): Maximum number of frequency masks to apply (default: 0).
+        freq_mask_param (int): Maximum possible width of each frequency mask (default: 0).
+        iid_freq_masks (bool): Whether to apply different frequency masks for each channel (default: True).
+        mask_value (float): The value to fill in the masked areas (default: 0.0).
+    """
+    def __init__(
+        self,
+        n_time_masks: int = 0,
+        time_mask_param: int = 0,
+        iid_time_masks: bool = True,
+        n_freq_masks: int = 0,
+        freq_mask_param: int = 0,
+        iid_freq_masks: bool = True,
+        mask_value: float = 0.0,
+    ):
+        super().__init__()
+        self.n_time_masks = n_time_masks
+        self.time_mask_param = time_mask_param
+        self.iid_time_masks = iid_time_masks
+        self.n_freq_masks = n_freq_masks
+        self.freq_mask_param = freq_mask_param
+        self.iid_freq_masks = iid_freq_masks
+        self.mask_value = mask_value
+
+        # Initialize torchaudio masking transforms
+        self.time_mask = torchaudio.transforms.TimeMasking(time_mask_param, iid_masks=iid_time_masks)
+        self.freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param, iid_masks=iid_freq_masks)
+
+    def forward(self, specgram: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            specgram (torch.Tensor): Input tensor of shape (T, N, bands, C, freq)
+        Returns:
+            torch.Tensor: Output tensor of shape (T, N, bands, C, freq)
+        """
+        # Move the time dimension to the end so that we can mask over time
+        # Input shape: (T, N, bands, C, freq) -> (N, bands, C, freq, T)
+        x = specgram.movedim(0, -1)
+
+        # Determine the number of time masks to apply using torch.randint
+        n_t_masks = torch.randint(0, self.n_time_masks + 1, (1,)).item()
+        for _ in range(n_t_masks):
+            x = self.time_mask(x, mask_value=self.mask_value)
+
+        # Determine the number of frequency masks to apply
+        n_f_masks = torch.randint(0, self.n_freq_masks + 1, (1,)).item()
+        for _ in range(n_f_masks):
+            x = self.freq_mask(x, mask_value=self.mask_value)
+
+        # Return the tensor to original shape: (N, bands, C, freq, T) -> (T, N, bands, C, freq)
+        return x.movedim(-1, 0)
 
 
 # Positional Encoding for transformer inputs

@@ -30,11 +30,8 @@ transforms:
     - ${to_tensor}
     - ${band_rotation}
     - ${temporal_jitter}
-#    - ${logspec}
-#    - ${specaug}
 
   val:
     - ${to_tensor}
-#    - ${logspec}
 
   test: ${transforms.val}
