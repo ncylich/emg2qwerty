@@ -313,7 +313,7 @@ class ConformerDecoder(pl.LightningModule):
         # Embedding for EMG data
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
-            SubsampleConvModule(channels=2, kernel_size=7, stride=2, dropout=dropout),
+            SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
