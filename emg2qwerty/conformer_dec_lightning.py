@@ -580,9 +580,6 @@ class ConformerDecoder(pl.LightningModule):
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)
 
-        if phase == "train":
-            self.log(f"train/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
-
         # Greedy decoding for metrics
         # Obtain predicted tokens from decoder_log_probs (shape: T x N)
         greedy_preds = torch.argmax(outputs["decoder_log_probs"], dim=-1)  # (T, N)
@@ -618,7 +615,7 @@ class ConformerDecoder(pl.LightningModule):
             # print(f"Target: {target.text}\tPrediction: {prediction.text}")
             metrics.update(prediction=prediction, target=target)
 
-        self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], batch_size=N, sync_dist=True, prog_bar=True)
+        self.log(f"{phase}/CER", metrics.compute()[f"{phase}/CER"], sync_dist=True, prog_bar=True)
         return loss
 
     def training_step(self, *args, **kwargs) -> torch.Tensor:
