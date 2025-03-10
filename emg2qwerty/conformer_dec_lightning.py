@@ -300,8 +300,8 @@ class ConformerDecoder(pl.LightningModule):
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
             ctc_loss_weight: float = 0.1,
-            tds_conv_block_channels: Sequence[int] = (16, 16),
-            tds_conv_kernel_width: int = 15,
+            tds_conv_encoder_block_channels: Sequence[int] = (16, 16),
+            tds_conv_encoder_kernel_width: int = 15,
             # hop_length: int: = 16,
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
@@ -330,7 +330,7 @@ class ConformerDecoder(pl.LightningModule):
             nn.Flatten(start_dim=2),
             # TDSConv2dBlock(channels=self.NUM_BANDS, width=mlp_features[-1], kernel_width=3, stride=2, padding=1, dropout=dropout),
             TDSConvEncoder(num_features=mlp_features[-1] * self.NUM_BANDS, dropout=dropout,
-                           block_channels=tds_conv_block_channels, kernel_width=tds_conv_kernel_width),
+                           block_channels=tds_conv_encoder_block_channels, kernel_width=tds_conv_encoder_kernel_width),
             # nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
         )
 

@@ -11,9 +11,9 @@ module:
   conv_kernel_size: 3
   conv_expansion_factor: 1
   dropout: 0.1
-  tds_conv_encoder_block_channels: (16, 16)
-  tds_conv_encoder_kernel_width: 15  # try 21
-  ctc_loss_weight: 0.15
+  tds_conv_encoder_block_channels: [16, 16]
+  tds_conv_encoder_kernel_width: 15
+  ctc_loss_weight: 0.1
 #  hop_length: ${logspec.hop_length}
 
 datamodule:
