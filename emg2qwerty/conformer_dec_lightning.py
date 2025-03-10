@@ -23,14 +23,14 @@ from torchmetrics import MetricCollection
 from emg2qwerty import utils
 from emg2qwerty.ce_charset import charset
 from emg2qwerty.ce_data import LabelData, WindowedEMGDataset
-from emg2qwerty.custom_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish, \
-    MlpSubsampleConvModule, DctLogSpectrogram, SpecAugment
+from emg2qwerty.custom_modules import SubsampleConvModule, PositionalEncoding, ConformerBlock, Swish, DctLogSpectrogram, SpecAugment
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
     SpectrogramNorm,
     TDSConvEncoder,
     PermuteReshape,
+    TDSConv2dBlock,
 )
 from emg2qwerty.transforms import Transform, LogFreqBinsSpectrogram
 
@@ -299,6 +299,9 @@ class ConformerDecoder(pl.LightningModule):
             ff_expansion_factor: int = 4,
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
+            ctc_loss_weight: float = 0.1,
+            tds_conv_block_channels: Sequence[int] = (16, 16),
+            tds_conv_kernel_width: int = 15,
             # hop_length: int: = 16,
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
@@ -318,15 +321,21 @@ class ConformerDecoder(pl.LightningModule):
         # Embedding for EMG data
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
-            SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
+            # SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
             nn.Flatten(start_dim=2),
-            nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
+            # TDSConv2dBlock(channels=self.NUM_BANDS, width=mlp_features[-1], kernel_width=3, stride=2, padding=1, dropout=dropout),
+            TDSConvEncoder(num_features=mlp_features[-1] * self.NUM_BANDS, dropout=dropout,
+                           block_channels=tds_conv_block_channels, kernel_width=tds_conv_kernel_width),
+            # nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
         )
+
+        self.embedding_to_encoder = nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
+        self.embedding_to_ctc = nn.Linear(mlp_features[-1] * self.NUM_BANDS, charset().num_classes)
 
         # Special token embeddings (learned)
         self.sos_embedding = nn.Parameter(torch.randn(1, 1, d_model))
@@ -365,11 +374,12 @@ class ConformerDecoder(pl.LightningModule):
             dropout=dropout
         )
 
-        # Output projection
         self.output_proj = nn.Linear(d_model, charset().num_classes)
 
-        # Loss functions
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=charset().null_class)
+        self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
+        self.ce_weight = 1.0 - ctc_loss_weight
+        self.ctc_weight = ctc_loss_weight
 
         # Beam search decoder (currently disabled; using greedy search instead)
         # self.beam_decoder = instantiate(decoder)
@@ -387,7 +397,7 @@ class ConformerDecoder(pl.LightningModule):
         """Generate a square mask where upper triangle is True (masked out, not including diagonal)"""
         return torch.tril(torch.ones(sz, sz)) == 0
 
-    def encode(self, inputs: torch.Tensor) -> torch.Tensor:
+    def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode input EMG data with the conformer encoder"""
         # Prepare Inputs (if using DCT)
         # x = self.spectrogram(inputs)
@@ -396,6 +406,8 @@ class ConformerDecoder(pl.LightningModule):
 
         # Embed Inputs
         x = self.embedding(inputs)  # (T, N, 2, d_model)
+        ctc_logits = self.embedding_to_ctc(x)  # (T, N, num_classes)
+        x = self.embedding_to_encoder(x)
         x = self.encoder_pos_encoding(x)
         # band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
         # band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
@@ -407,7 +419,7 @@ class ConformerDecoder(pl.LightningModule):
         for block in self.conformer_blocks:
             x = block(x)
 
-        return x
+        return x, ctc_logits
 
     def forward(
             self,
@@ -429,7 +441,7 @@ class ConformerDecoder(pl.LightningModule):
             Dictionary with encoder and decoder outputs
         """
         device = inputs.device
-        encoder_outputs = self.encode(inputs)  # (T, N, d_model)
+        encoder_outputs, ctc_logits = self.encode(inputs)  # (T, N, d_model)
 
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
@@ -521,12 +533,14 @@ class ConformerDecoder(pl.LightningModule):
             decoder_log_probs = nn.functional.log_softmax(decoder_logits, dim=-1)
 
         return {
+            "ctc_logits": ctc_logits,
             "decoder_logits": decoder_logits,
             "decoder_log_probs": decoder_log_probs
         }
 
     def _step(self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs) -> torch.Tensor:
         inputs = batch["inputs"]
+        input_lengths = batch["input_lengths"]
         targets = batch["targets"]
         target_lengths = batch["target_lengths"]
         N = len(target_lengths)
@@ -548,7 +562,20 @@ class ConformerDecoder(pl.LightningModule):
             ce_logits = ce_logits.reshape(-1, charset().num_classes)
             ce_targets = ce_targets.reshape(-1)
 
-            loss = self.ce_loss(ce_logits, ce_targets)
+            ce_loss = self.ce_loss(ce_logits, ce_targets)
+
+            ctc_loss = outputs["ctc_logits"]
+            emissions = F.log_softmax(ctc_loss, dim=-1)
+            T_diff = inputs.shape[0] - emissions.shape[0]
+            emission_lengths = input_lengths - T_diff
+            ctc_loss = self.ctc_loss(
+                log_probs=emissions,  # (T, N, num_classes)
+                targets=targets.transpose(0, 1),  # (T, N) -> (N, T)
+                input_lengths=emission_lengths,  # (N,)
+                target_lengths=target_lengths,  # (N,)
+            )
+
+            loss = self.ce_weight * ce_loss + self.ctc_weight * ctc_loss
         else:
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)

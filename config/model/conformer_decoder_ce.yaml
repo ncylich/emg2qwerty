@@ -11,9 +11,12 @@ module:
   conv_kernel_size: 3
   conv_expansion_factor: 1
   dropout: 0.1
+  tds_conv_encoder_block_channels: (16, 16)
+  tds_conv_encoder_kernel_width: 15  # try 21
+  ctc_loss_weight: 0.15
 #  hop_length: ${logspec.hop_length}
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule
-  window_length: 5000  # 4 sec windows for 2kHz EMG
-  padding: [0, 0]  # No padding, [1800, 200]  # 900ms past context, 100ms future context
+  window_length: 4000  # 4 sec windows for 2kHz EMG
+  padding: [800, 200]  # No padding, [1800, 200]  # 900ms past context, 100ms future context

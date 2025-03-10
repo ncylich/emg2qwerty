@@ -206,7 +206,7 @@ class TDSConv2dBlock(nn.Module):
         kernel_width (int): The kernel size of the temporal convolution.
     """
 
-    def __init__(self, channels: int, width: int, kernel_width: int) -> None:
+    def __init__(self, channels: int, width: int, kernel_width: int, stride: int = 1, padding: int = 0, dropout: float=0) -> None:
         super().__init__()
         self.channels = channels
         self.width = width
@@ -215,8 +215,11 @@ class TDSConv2dBlock(nn.Module):
             in_channels=channels,
             out_channels=channels,
             kernel_size=(1, kernel_width),
+            stride = (1, stride),
+            padding = (0, padding),
         )
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(channels * width)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -227,6 +230,7 @@ class TDSConv2dBlock(nn.Module):
         x = self.conv2d(x)
         x = self.relu(x)
         x = x.reshape(N, C, -1).movedim(-1, 0)  # NcwT -> NCT -> TNC
+        x = self.dropout(x)
 
         # Skip connection after downsampling
         T_out = x.shape[0]
@@ -246,7 +250,7 @@ class TDSFullyConnectedBlock(nn.Module):
             (T, N, num_features).
     """
 
-    def __init__(self, num_features: int) -> None:
+    def __init__(self, num_features: int, dropout: float=0) -> None:
         super().__init__()
 
         self.fc_block = nn.Sequential(
@@ -254,11 +258,13 @@ class TDSFullyConnectedBlock(nn.Module):
             nn.ReLU(),
             nn.Linear(num_features, num_features),
         )
+        self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(num_features)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = inputs  # TNC
         x = self.fc_block(x)
+        x = self.dropout(x)
         x = x + inputs
         return self.layer_norm(x)  # TNC
 
@@ -282,6 +288,7 @@ class TDSConvEncoder(nn.Module):
         num_features: int,
         block_channels: Sequence[int] = (24, 24, 24, 24),
         kernel_width: int = 32,
+        dropout: float = 0,
     ) -> None:
         super().__init__()
 
@@ -293,8 +300,8 @@ class TDSConvEncoder(nn.Module):
             ), "block_channels must evenly divide num_features"
             tds_conv_blocks.extend(
                 [
-                    TDSConv2dBlock(channels, num_features // channels, kernel_width),
-                    TDSFullyConnectedBlock(num_features),
+                    TDSConv2dBlock(channels, num_features // channels, kernel_width, dropout=dropout),
+                    TDSFullyConnectedBlock(num_features, dropout=dropout),
                 ]
             )
         self.tds_conv_blocks = nn.Sequential(*tds_conv_blocks)
