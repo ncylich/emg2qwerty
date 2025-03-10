@@ -300,6 +300,7 @@ class ConformerDecoder(pl.LightningModule):
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
             ctc_loss_weight: float = 0.1,
+            l1_loss_weight: float = 0.0,
             tds_conv_encoder_block_channels: Sequence[int] = (16, 16),
             tds_conv_encoder_kernel_width: int = 15,
             # hop_length: int: = 16,
@@ -381,8 +382,10 @@ class ConformerDecoder(pl.LightningModule):
         self.ce_weight = 1.0 - ctc_loss_weight
         self.ctc_weight = ctc_loss_weight
 
-        # Beam search decoder (currently disabled; using greedy search instead)
-        # self.beam_decoder = instantiate(decoder)
+        self.l1_loss_weight = l1_loss_weight
+
+        # Beam search decoder
+        self.beam_decoder = instantiate(decoder)
 
         # Character error rate metrics
         metrics = MetricCollection([CharacterErrorRates()])
@@ -396,6 +399,12 @@ class ConformerDecoder(pl.LightningModule):
     def _generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
         """Generate a square mask where upper triangle is True (masked out, not including diagonal)"""
         return torch.tril(torch.ones(sz, sz)) == 0
+
+    def l1_loss(self):
+        if self.l1_loss_weight == 0.0:
+            return 0.0
+        l1_loss = sum(torch.norm(param, p=1) for param in self.parameters() if param.requires_grad)
+        return self.l1_loss_weight * l1_loss
 
     def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode input EMG data with the conformer encoder"""
@@ -575,7 +584,9 @@ class ConformerDecoder(pl.LightningModule):
                 target_lengths=target_lengths,  # (N,)
             )
 
-            loss = self.ce_weight * ce_loss + self.ctc_weight * ctc_loss
+            l1_loss = self.l1_loss()
+
+            loss = ce_loss + ctc_loss + l1_loss
         else:
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)
