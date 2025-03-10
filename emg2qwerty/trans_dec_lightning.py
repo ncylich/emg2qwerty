@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Optional
-
 import math
 import numpy as np
 import torch
@@ -562,9 +561,6 @@ class TransformerEncoderDecoder(pl.LightningModule):
         else:
             # For validation/test
             loss = torch.tensor(0.0, device=inputs.device)
-
-        if phase == "train":
-            self.log(f"train/loss", loss, batch_size=N, sync_dist=True, prog_bar=True)
 
         # Greedy decoding for metrics
         greedy_preds = torch.argmax(outputs["decoder_log_probs"], dim=-1)  # (T, N)

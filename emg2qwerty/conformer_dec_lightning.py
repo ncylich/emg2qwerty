@@ -18,7 +18,7 @@ from omegaconf import DictConfig
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader
-from torchmetrics import MetricCollection
+from torchmetrics import MetricCollection, MeanMetric
 
 from emg2qwerty import utils
 from emg2qwerty.ce_charset import charset
@@ -395,6 +395,9 @@ class ConformerDecoder(pl.LightningModule):
                 for phase in ["train", "val", "test"]
             }
         )
+        self.loss_metrics = nn.ModuleDict(
+            {f"{loss}_loss": MeanMetric() for loss in ["ce", "ctc", "l1"]}
+        )
 
     def _generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
         """Generate a square mask where upper triangle is True (masked out, not including diagonal)"""
@@ -405,6 +408,14 @@ class ConformerDecoder(pl.LightningModule):
             return 0.0
         l1_loss = sum(torch.norm(param, p=1) for param in self.parameters() if param.requires_grad)
         return self.l1_loss_weight * l1_loss
+
+    def log_loss_metrics(self, ce_loss, ctc_loss, l1_loss):
+        self.loss_metrics["ce_loss"].update(ce_loss)
+        self.loss_metrics["ctc_loss"].update(ctc_loss)
+        self.loss_metrics["l1_loss"].update(l1_loss)
+        self.log(f"ce_loss", self.loss_metrics["ce_loss"].compute(), sync_dist=True, prog_bar=True)
+        self.log(f"ctc_loss", self.loss_metrics["ctc_loss"].compute(), sync_dist=True, prog_bar=True)
+        self.log(f"l1_loss", self.loss_metrics["l1_loss"].compute(), sync_dist=True, prog_bar=True)
 
     def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode input EMG data with the conformer encoder"""
@@ -586,10 +597,7 @@ class ConformerDecoder(pl.LightningModule):
 
             l1_loss = self.l1_loss()
 
-            self.log(f"ce_loss", ce_loss, sync_dist=True, prog_bar=True)
-            self.log(f"ctc_loss", ctc_loss, sync_dist=True, prog_bar=True)
-            self.log(f"l1_loss", l1_loss, sync_dist=True, prog_bar=True)
-
+            self.log_loss_metrics(ce_loss=ce_loss, ctc_loss=ctc_loss, l1_loss=l1_loss)
             loss = ce_loss + ctc_loss + l1_loss
         else:
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
@@ -649,6 +657,8 @@ class ConformerDecoder(pl.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         self._epoch_end("train")
+        for metric in self.loss_metrics.values():
+            metric.reset()
 
     def on_validation_epoch_end(self) -> None:
         self._epoch_end("val")

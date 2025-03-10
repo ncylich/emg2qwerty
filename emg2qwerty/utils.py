@@ -12,6 +12,9 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.utilities.rank_zero import rank_zero_info
+
 
 def instantiate_optimizer_and_scheduler(
     params: Iterator[nn.Parameter],
@@ -42,3 +45,9 @@ def cpus_per_task(gpus_per_node: int, tasks_per_node: int, num_workers: int) -> 
         return num_workers + 1
     else:
         return (num_workers + 1) * gpus_per_task
+
+
+class CustomModelCheckpoint(ModelCheckpoint):
+    def on_validation_end(self, trainer, pl_module):
+        rank_zero_info('')
+        super().on_validation_end(trainer, pl_module)
