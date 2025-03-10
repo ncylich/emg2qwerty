@@ -382,7 +382,7 @@ class ConformerDecoder(pl.LightningModule):
         self.ce_weight = 1.0 - ctc_loss_weight
         self.ctc_weight = ctc_loss_weight
 
-        self.l1_loss_weight = l1_loss_weight
+        self.l1_loss_weight = self.hparams.l1_loss_weight
 
         # Beam search decoder
         self.beam_decoder = instantiate(decoder)
@@ -585,6 +585,10 @@ class ConformerDecoder(pl.LightningModule):
             )
 
             l1_loss = self.l1_loss()
+
+            self.log(f"ce_loss", ce_loss, sync_dist=True, prog_bar=True)
+            self.log(f"ctc_loss", ctc_loss, sync_dist=True, prog_bar=True)
+            self.log(f"l1_loss", l1_loss, sync_dist=True, prog_bar=True)
 
             loss = ce_loss + ctc_loss + l1_loss
         else:
