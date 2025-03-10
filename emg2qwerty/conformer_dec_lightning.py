@@ -411,11 +411,12 @@ class ConformerDecoder(pl.LightningModule):
 
     def log_loss_metrics(self, ce_loss, ctc_loss, l1_loss):
         self.loss_metrics["ce_loss"].update(ce_loss)
-        self.loss_metrics["ctc_loss"].update(ctc_loss)
-        self.loss_metrics["l1_loss"].update(l1_loss)
         self.log(f"ce_loss", self.loss_metrics["ce_loss"].compute(), sync_dist=True, prog_bar=True)
+        self.loss_metrics["ctc_loss"].update(ctc_loss)
         self.log(f"ctc_loss", self.loss_metrics["ctc_loss"].compute(), sync_dist=True, prog_bar=True)
-        self.log(f"l1_loss", self.loss_metrics["l1_loss"].compute(), sync_dist=True, prog_bar=True)
+        if self.l1_loss_weight > 0:
+            self.loss_metrics["l1_loss"].update(l1_loss)
+            self.log(f"l1_loss", self.loss_metrics["l1_loss"].compute(), sync_dist=True, prog_bar=True)
 
     def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode input EMG data with the conformer encoder"""
