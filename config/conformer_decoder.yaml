@@ -1,5 +1,5 @@
 defaults:
-  - user: 1_user_train_1_user_test
+  - user: triple_user
   - transforms: base_log_spectrogram
   - model: conformer_decoder_ce
   - optimizer: adam
