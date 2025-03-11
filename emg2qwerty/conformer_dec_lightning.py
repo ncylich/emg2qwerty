@@ -396,7 +396,7 @@ class ConformerDecoder(pl.LightningModule):
         return torch.tril(torch.ones(sz, sz)) == 0
 
     def l1_loss(self):
-        if self.l1_loss_weight == 0.0:
+        if self.l1_weight == 0.0:
             return 0.0
         return sum(torch.norm(param, p=1) for param in self.parameters() if param.requires_grad)
 
