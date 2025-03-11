@@ -8,6 +8,8 @@ defaults:
   - cluster: local
   - _self_
 
+name: conformer_decoder
+
 lr: 3e-4
 weight_decay: 1e-5
 l1_loss_weight: 0

@@ -8,6 +8,8 @@ defaults:
   - cluster: local
   - _self_
 
+name: base_tds_conv_ctc
+
 lr: 1e-4
 weight_decay: 0
 
