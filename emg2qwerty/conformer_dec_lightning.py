@@ -302,6 +302,7 @@ class ConformerDecoder(pl.LightningModule):
             tds_conv_encoder_block_channels: Sequence[int] = (16, 16),
             tds_conv_encoder_kernel_width: int = 15,
             # hop_length: int: = 16,
+            use_dct: bool = False,
             sos_token_id: int = None,  # Add SOS token ID parameter
             eos_token_id: int = None,
             optimizer: DictConfig = None,
@@ -314,13 +315,14 @@ class ConformerDecoder(pl.LightningModule):
         self.sos_token_id = sos_token_id if sos_token_id is not None else charset().sos_class
         self.eos_token_id = eos_token_id if eos_token_id is not None else charset().eos_class
 
-        # self.spectrogram = DctLogSpectrogram(n_dct=30, hop_length=hop_length)
-        # self.spec_augment = SpecAugment(n_time_masks=3, time_mask_param=25, n_freq_masks=2, freq_mask_param=4)
+        self.use_dct = use_dct
+        if use_dct:
+            self.spectrogram = DctLogSpectrogram(n_dct=64, hop_length=16)
+            self.spec_augment = SpecAugment(n_time_masks=3, time_mask_param=25, n_freq_masks=2, freq_mask_param=4)
 
         # Embedding for EMG data
         self.embedding = nn.Sequential(
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
-            # SubsampleConvModule(channels=2, kernel_size=3, stride=2, dropout=dropout),
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
@@ -330,7 +332,6 @@ class ConformerDecoder(pl.LightningModule):
             # TDSConv2dBlock(channels=self.NUM_BANDS, width=mlp_features[-1], kernel_width=3, stride=2, padding=1, dropout=dropout),
             TDSConvEncoder(num_features=mlp_features[-1] * self.NUM_BANDS, dropout=dropout,
                            block_channels=tds_conv_encoder_block_channels, kernel_width=tds_conv_encoder_kernel_width),
-            # nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
         )
 
         self.embedding_to_encoder = nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
@@ -419,9 +420,10 @@ class ConformerDecoder(pl.LightningModule):
     def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode input EMG data with the conformer encoder"""
         # Prepare Inputs (if using DCT)
-        # x = self.spectrogram(inputs)
-        # if self.training:
-        #     x = self.spec_augment(x)
+        if self.use_dct:
+            inputs = self.spectrogram(inputs)
+            if self.training:
+                inputs = self.spec_augment(inputs)
 
         # Embed Inputs
         x = self.embedding(inputs)  # (T, N, 2, d_model)

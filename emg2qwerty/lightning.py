@@ -27,6 +27,7 @@ from emg2qwerty.modules import (
     TDSConvEncoder,
 )
 from emg2qwerty.transforms import Transform
+from emg2qwerty.custom_modules import DctLogSpectrogram, SpecAugment
 
 
 class WindowedEMGDataModule(pl.LightningDataModule):
@@ -150,6 +151,7 @@ class TDSConvCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        use_dct: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -179,6 +181,12 @@ class TDSConvCTCModule(pl.LightningModule):
             nn.LogSoftmax(dim=-1),
         )
 
+        # DCT Log Spectrogram
+        self.use_dct = use_dct
+        if use_dct:
+            self.spectrogram = DctLogSpectrogram(n_dct=64, hop_length=16)
+            self.spec_augment = SpecAugment(n_time_masks=3, time_mask_param=25, n_freq_masks=2, freq_mask_param=4)
+
         # Criterion
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
 
@@ -195,6 +203,10 @@ class TDSConvCTCModule(pl.LightningModule):
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if self.use_dct:
+            inputs = self.spectrogram(inputs)
+            if self.training:
+                inputs = self.spec_augment(inputs)
         return self.model(inputs)
 
     def _step(
