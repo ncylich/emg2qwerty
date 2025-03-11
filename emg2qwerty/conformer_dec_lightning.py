@@ -298,6 +298,7 @@ class ConformerDecoder(pl.LightningModule):
             conv_expansion_factor: int = 2,
             dropout: float = 0.1,
             ctc_loss_weight: float = 0.1,
+            l1_loss_weight: float = 0.0,
             tds_conv_encoder_block_channels: Sequence[int] = (16, 16),
             tds_conv_encoder_kernel_width: int = 15,
             sos_token_id: int = None,  # Add SOS token ID parameter
@@ -373,7 +374,7 @@ class ConformerDecoder(pl.LightningModule):
         self.ce_weight = 1.0 - ctc_loss_weight
         self.ctc_weight = ctc_loss_weight
 
-        self.l1_weight = self.hparams.l1_loss_weight
+        self.l1_weight = l1_loss_weight
 
         # Beam search decoder
         self.beam_decoder = instantiate(decoder)

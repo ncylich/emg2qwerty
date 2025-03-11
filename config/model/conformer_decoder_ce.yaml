@@ -14,7 +14,7 @@ module:
   tds_conv_encoder_block_channels: [16, 16]
   tds_conv_encoder_kernel_width: 15
   ctc_loss_weight: 0.1
-#  hop_length: ${logspec.hop_length}
+  l1_loss_weight: ${l1_loss_weight}
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule
