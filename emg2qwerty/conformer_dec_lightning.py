@@ -374,7 +374,7 @@ class ConformerDecoder(pl.LightningModule):
         self.ce_weight = 1.0 - ctc_loss_weight
         self.ctc_weight = ctc_loss_weight
 
-        self.l1_loss_weight = self.hparams.l1_loss_weight
+        self.l1_weight = l1_loss_weight
 
         # Beam search decoder
         self.beam_decoder = instantiate(decoder)
@@ -396,17 +396,16 @@ class ConformerDecoder(pl.LightningModule):
         return torch.tril(torch.ones(sz, sz)) == 0
 
     def l1_loss(self):
-        if self.l1_loss_weight == 0.0:
+        if self.l1_weight == 0.0:
             return 0.0
-        l1_loss = sum(torch.norm(param, p=1) for param in self.parameters() if param.requires_grad)
-        return self.l1_loss_weight * l1_loss
+        return sum(torch.norm(param, p=1) for param in self.parameters() if param.requires_grad)
 
     def log_loss_metrics(self, ce_loss, ctc_loss, l1_loss):
         self.loss_metrics["ce_loss"].update(ce_loss)
         self.log(f"ce_loss", self.loss_metrics["ce_loss"].compute(), sync_dist=True, prog_bar=True)
         self.loss_metrics["ctc_loss"].update(ctc_loss)
         self.log(f"ctc_loss", self.loss_metrics["ctc_loss"].compute(), sync_dist=True, prog_bar=True)
-        if self.l1_loss_weight > 0:
+        if self.l1_weight > 0:
             self.loss_metrics["l1_loss"].update(l1_loss)
             self.log(f"l1_loss", self.loss_metrics["l1_loss"].compute(), sync_dist=True, prog_bar=True)
 
@@ -586,7 +585,7 @@ class ConformerDecoder(pl.LightningModule):
             l1_loss = self.l1_loss()
 
             self.log_loss_metrics(ce_loss=ce_loss, ctc_loss=ctc_loss, l1_loss=l1_loss)
-            loss = ce_loss + ctc_loss + l1_loss
+            loss = self.ce_weight * ce_loss + self.ctc_weight * ctc_loss + self.l1_weight * l1_loss
         else:
             # For validation (or test), skip cross-entropy loss computation due to variable output lengths
             loss = torch.tensor(0.0, device=inputs.device)
