@@ -15,8 +15,8 @@ temporal_jitter:
 
 logspec:
   _target_: emg2qwerty.transforms.DctLogSpectrogram
-  n_dct: 30 # IF YOU CHANGE THIS YOU MUST ALSO CHANGE in_features in conformer_decoder_ce.yaml
-  hop_length: 16  # Downsamples from 2kHz to 125Hz
+  n_dct: 64 # IF YOU CHANGE THIS YOU MUST ALSO CHANGE in_features in conformer_decoder_ce.yaml
+  hop_length: 16  # Downsample from 2kHz to 125Hz
 
 specaug:
   _target_: emg2qwerty.transforms.SpecAugment
@@ -30,8 +30,11 @@ transforms:
     - ${to_tensor}
     - ${band_rotation}
     - ${temporal_jitter}
+    - ${logspec}
+    - ${specaug}
 
   val:
     - ${to_tensor}
+    - ${logspec}
 
   test: ${transforms.val}

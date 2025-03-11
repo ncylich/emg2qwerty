@@ -7,6 +7,7 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
+import math
 
 import numpy as np
 import torch
@@ -187,6 +188,59 @@ class LogSpectrogram:
         spec = self.spectrogram(x)  # (..., C, freq, T)
         logspec = torch.log10(spec + 1e-6)  # (..., C, freq, T)
         return logspec.movedim(-1, 0)  # (T, ..., C, freq)
+
+@dataclass
+class DctLogSpectrogram:
+    """
+    Computes log spectrogram features from input signals by applying a DCT
+    along the frequency axis. Expects inputs of shape (T, N, bands, C, F)
+    and returns outputs of shape (T, N, bands, C, freq), where it is assumed
+    that bands==2 and C==16.
+
+    Args:
+        n_dct (int): Window size for unfolding along frequency axis.
+                     Also the size of the DCT window.
+        hop_length (int): Step size for unfolding.
+        log_offset (float): Small constant added for numerical stability.
+    """
+
+    n_dct: int = 64
+    hop_length: int = 16
+    log_offset: float = 1e-6
+
+    def __post_init__(self) -> None:
+        super().__init__()
+        self.combined_dct_hann = self._initialize_combined_dct_hann_matrix()
+
+    def _initialize_combined_dct_hann_matrix(self) -> torch.Tensor:
+        n = self.n_dct
+        dct_mat = torch.empty(n, n)
+        for k in range(n):
+            for i in range(n):
+                dct_mat[k, i] = math.cos(math.pi * k * (2 * i + 1) / (2 * n))
+        dct_mat[0] *= 1.0 / math.sqrt(n)
+        dct_mat[1:] *= math.sqrt(2.0 / n)
+        combined_dct_hann = dct_mat * torch.hann_window(n).unsqueeze(1)  # Same as diag(window) @ dct_mat
+        return combined_dct_hann
+
+    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            inputs (torch.Tensor): Tensor of shape (T, ..., C)
+        Returns:
+            torch.Tensor: Tensor of shape (T, ..., C)
+        """
+        permuted_inputs = inputs.movedim(0, -1)  # (..., C, T)
+        x_unfold = permuted_inputs.unfold(dimension=-1, size=self.n_dct, step=self.hop_length)  # (..., C, T', n_dct)
+
+        # Combined windowing & DCT mult
+        dct_coeffs = torch.matmul(x_unfold, self.combined_dct_hann)
+
+        # Energy + log
+        spec = dct_coeffs.pow(2)
+        logspec = torch.log10(spec + self.log_offset)
+        return logspec.movedim(-2, 0)  # (T', ..., C, n_dct)
+
 
 
 @dataclass
