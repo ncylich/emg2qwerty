@@ -1,0 +1,25 @@
+in_features: 132
+mlp_features:
+- 384
+block_channels:
+- 24
+- 24
+- 24
+- 24
+kernel_width: 32
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.0001
+  weight_decay: 0
+lr_scheduler:
+  scheduler:
+    _target_: pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR
+    warmup_epochs: 10
+    max_epochs: 300
+    warmup_start_lr: 1.0e-08
+    eta_min: 1.0e-06
+  interval: epoch
+decoder:
+  _target_: emg2qwerty.decoder.CTCGreedyDecoder
+use_dct: false
+input_channels: 4
