@@ -1,0 +1,2 @@
+- trainer.accelerator=gpu
+- trainer.devices=1
