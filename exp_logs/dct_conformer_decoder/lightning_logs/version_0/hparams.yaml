@@ -1,0 +1,33 @@
+in_features: 1024
+mlp_features:
+- 256
+d_model: 128
+nhead: 2
+num_encoder_layers: 2
+num_decoder_layers: 2
+conv_kernel_size: 3
+ff_expansion_factor: 1
+conv_expansion_factor: 1
+dropout: 0.1
+ctc_loss_weight: 0.1
+l1_loss_weight: 0
+tds_conv_encoder_block_channels:
+- 16
+- 16
+tds_conv_encoder_kernel_width: 15
+sos_token_id: null
+eos_token_id: null
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.0003
+  weight_decay: 1.0e-05
+decoder:
+  _target_: emg2qwerty.decoder.CTCGreedyDecoder
+lr_scheduler:
+  scheduler:
+    _target_: pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR
+    warmup_epochs: 10
+    max_epochs: 300
+    warmup_start_lr: 1.0e-08
+    eta_min: 1.0e-06
+  interval: epoch
