@@ -3,12 +3,12 @@ defaults:
   - transforms: log_spectrogram
   - model: transformer_decoder_ce
   - optimizer: adam
-  - lr_scheduler: linear_warmup_cosine_annealing
+  - lr_scheduler: testing_linear_warmup_cosine_annealing
   - decoder: ctc_greedy
   - cluster: local
   - _self_
 
-lr: 5e-4
+lr: 3e-4
 weight_decay: 1e-5
 
 seed: 1501
@@ -23,7 +23,7 @@ trainer:
   accelerator: gpu
   devices: 1
   num_nodes: 1
-  max_epochs: 5000
+  max_epochs: 150
   default_root_dir: ${hydra:runtime.output_dir}
 
 callbacks:

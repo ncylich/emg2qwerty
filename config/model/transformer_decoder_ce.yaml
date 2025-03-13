@@ -1,7 +1,7 @@
 # @package _global_
 module:
   _target_: emg2qwerty.trans_dec_lightning.TransformerEncoderDecoder
-  in_features: 256  # LOG_SPECTROGRAM: n_mels * number of electrodes (16); BASE_LOG_SPECTROGRAM: (n_fft // 2 + 1) * number of electrodes (16)
+  in_features: 528  # LOG_SPECTROGRAM: n_mels * number of electrodes (16); BASE_LOG_SPECTROGRAM: (n_fft // 2 + 1) * number of electrodes (16)
   mlp_features: [256]
   d_model: 128
   nhead: 2
@@ -9,9 +9,11 @@ module:
   num_decoder_layers: 2
   feedforward_mult: 2
   dropout: 0.1
-  ctc_loss_weight: 0
+  tds_conv_encoder_block_channels: [16, 16]
+  tds_conv_encoder_kernel_width: 15
+  ctc_loss_weight: 0.1
 
 datamodule:
   _target_: emg2qwerty.conformer_dec_lightning.WindowedEMGDataModule
-  window_length: 5000  # 4 sec windows for 2kHz EMG
-  padding: [0, 0]  # No padding, [1800, 200]  # 900ms past context, 100ms future context
+  window_length: 4000  # 4 sec windows for 2kHz EMG
+  padding: [800, 200]  # No padding, [1800, 200]  # 900ms past context, 100ms future context

@@ -295,6 +295,8 @@ class TransformerEncoderDecoder(pl.LightningModule):
             feedforward_mult: int = 2,
             dropout: float = 0.1,
             ctc_loss_weight: float = 0.5,
+            tds_conv_encoder_block_channels: Sequence[int] = (16,16),
+            tds_conv_encoder_kernel_width: int = 15,
             sos_token_id: int = None,
             eos_token_id: int = None,
             optimizer: DictConfig = None,
@@ -310,14 +312,16 @@ class TransformerEncoderDecoder(pl.LightningModule):
 
         # Embedding for EMG data
         self.embedding = nn.Sequential(
-            # DctLogSpectogram(n_dct=in_features // self.ELECTRODE_CHANNELS, hop_length=16),  # for dct_log_spectrogram
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),  # (T, N, 2, 16, 6)
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
-            nn.Linear(mlp_features[-1], d_model),
+            nn.Flatten(start_dim=2),
+            # TDSConv2dBlock(channels=self.NUM_BANDS, width=mlp_features[-1], kernel_width=3, stride=2, padding=1, dropout=dropout),
+            TDSConvEncoder(num_features=mlp_features[-1] * self.NUM_BANDS, dropout=dropout,
+                           block_channels=tds_conv_encoder_block_channels, kernel_width=tds_conv_encoder_kernel_width),
         )
 
         # Special token embeddings
@@ -341,7 +345,8 @@ class TransformerEncoderDecoder(pl.LightningModule):
             dropout=dropout
         )
 
-        self.ctc_proj = nn.Linear(2 * d_model, charset().num_classes)
+        self.embedding_to_encoder = nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
+        self.embedding_to_ctc = nn.Linear(mlp_features[-1] * self.NUM_BANDS, charset().num_classes)
 
         # Decoder embedding
         self.decoder_embedding = nn.Embedding(charset().num_classes, d_model)
@@ -383,6 +388,10 @@ class TransformerEncoderDecoder(pl.LightningModule):
         """Encode input EMG data with the transformer encoder"""
         # Embed inputs
         x = self.embedding(inputs)  # (T, N, 2, d_model)
+        ctc_logits = self.embedding_to_ctc(x)
+
+        x = x.rehapse(x.size(0), x.size(1), self.NUM_BANDS, self.ELECTRODE_CHANNELS, -1)
+        x = self.embedding_to_encoder(x)
         band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
         band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
         band1 = band1 + self.band_embedding(torch.zeros(1, 1, dtype=torch.long, device=inputs.device))
@@ -392,7 +401,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
         # Pass through transformer encoder
         x = self.transformer_encoder(x)
 
-        return x
+        return x, ctc_logits
 
     def forward(
             self,
@@ -414,7 +423,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
             Dictionary with encoder and decoder outputs
         """
         device = inputs.device
-        encoder_outputs = self.encode(inputs)  # (T, N, d_model)
+        encoder_outputs, ctc_logits = self.encode(inputs)  # (T, N, d_model)
 
         if self.ctc_loss_weight > 0:
             T, N, D = encoder_outputs.size()
@@ -424,7 +433,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
         else:
             encoder_logits = None
             ctc_log_probs = None
-        
+
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
             # Add EOS tokens to targets for training
@@ -514,8 +523,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
             decoder_log_probs = nn.functional.log_softmax(decoder_logits, dim=-1)
 
         return {
-            "ctc_logits": encoder_logits,
-            "ctc_log_probs": ctc_log_probs,
+            "ctc_logits": ctc_logits,
             "decoder_logits": decoder_logits,
             "decoder_log_probs": decoder_log_probs
         }
@@ -536,11 +544,14 @@ class TransformerEncoderDecoder(pl.LightningModule):
             if self.ctc_loss_weight > 0:
                 # Compute CTC loss
                 ctc_logits = outputs["ctc_log_probs"]
+                emissions = F.log_softmax(ctc_logits, dim=-1)
+                T_diff = inputs.shape[0] - emissions.shape[0]
+                emission_lengths = input_lengths - T_diff
                 ctc_loss = self.ctc_loss(
-                    log_probs=ctc_logits,
-                    targets=targets_t,
-                    input_lengths=input_lengths,
-                    target_lengths=target_lengths
+                    log_probs=emissions,  # (T, N, num_classes)
+                    targets=targets.transpose(0, 1),  # (T, N) -> (N, T)
+                    input_lengths=emission_lengths,  # (N,)
+                    target_lengths=target_lengths,  # (N,)
                 )
             else:
                 ctc_loss = 0
