@@ -345,8 +345,8 @@ class TransformerEncoderDecoder(pl.LightningModule):
             dropout=dropout
         )
 
-        self.embedding_to_encoder = nn.Linear(mlp_features[-1] * self.NUM_BANDS, d_model)
         self.embedding_to_ctc = nn.Linear(mlp_features[-1] * self.NUM_BANDS, charset().num_classes)
+        self.embedding_to_encoder = nn.Linear(mlp_features[-1], d_model)
 
         # Decoder embedding
         self.decoder_embedding = nn.Embedding(charset().num_classes, d_model)
@@ -384,13 +384,13 @@ class TransformerEncoderDecoder(pl.LightningModule):
         """Generate a square mask where upper triangle is True (masked out, not including diagonal)"""
         return torch.tril(torch.ones(sz, sz)) == 0
 
-    def encode(self, inputs: torch.Tensor) -> torch.Tensor:
+    def encode(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode input EMG data with the transformer encoder"""
         # Embed inputs
-        x = self.embedding(inputs)  # (T, N, 2, d_model)
+        x = self.embedding(inputs)  # (T, N, 2 * mlp_features)
         ctc_logits = self.embedding_to_ctc(x)
 
-        x = x.rehapse(x.size(0), x.size(1), self.NUM_BANDS, self.ELECTRODE_CHANNELS, -1)
+        x = x.reshape(x.size(0), x.size(1), self.NUM_BANDS, -1)
         x = self.embedding_to_encoder(x)
         band1 = self.encoder_pos_encoding(x[:, :, 0, :])  # (T, N, d_model)
         band2 = self.encoder_pos_encoding(x[:, :, 1, :])  # (T, N, d_model)
@@ -424,15 +424,6 @@ class TransformerEncoderDecoder(pl.LightningModule):
         """
         device = inputs.device
         encoder_outputs, ctc_logits = self.encode(inputs)  # (T, N, d_model)
-
-        if self.ctc_loss_weight > 0:
-            T, N, D = encoder_outputs.size()
-            encoder_logit_outputs = encoder_outputs.reshape(T // 2, N, 2 * D)
-            encoder_logits = self.ctc_proj(encoder_logit_outputs)
-            ctc_log_probs = nn.functional.log_softmax(encoder_logits, dim=-1)
-        else:
-            encoder_logits = None
-            ctc_log_probs = None
 
         # Handle decoder outputs based on training or inference
         if self.training and targets is not None:
@@ -543,7 +534,7 @@ class TransformerEncoderDecoder(pl.LightningModule):
 
             if self.ctc_loss_weight > 0:
                 # Compute CTC loss
-                ctc_logits = outputs["ctc_log_probs"]
+                ctc_logits = outputs["ctc_logits"]
                 emissions = F.log_softmax(ctc_logits, dim=-1)
                 T_diff = inputs.shape[0] - emissions.shape[0]
                 emission_lengths = input_lengths - T_diff

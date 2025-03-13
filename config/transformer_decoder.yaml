@@ -1,6 +1,6 @@
 defaults:
   - user: triple_user
-  - transforms: log_spectrogram
+  - transforms: base_log_spectrogram
   - model: transformer_decoder_ce
   - optimizer: adam
   - lr_scheduler: testing_linear_warmup_cosine_annealing
