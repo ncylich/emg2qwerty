@@ -571,8 +571,8 @@ class ConformerDecoder(pl.LightningModule):
 
             ce_loss = self.ce_loss(ce_logits, ce_targets)
 
-            ctc_loss = outputs["ctc_logits"]
-            emissions = F.log_softmax(ctc_loss, dim=-1)
+            ctc_logits = outputs["ctc_logits"]
+            emissions = F.log_softmax(ctc_logits, dim=-1)
             T_diff = inputs.shape[0] - emissions.shape[0]
             emission_lengths = input_lengths - T_diff
             ctc_loss = self.ctc_loss(
