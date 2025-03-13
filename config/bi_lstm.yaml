@@ -1,5 +1,5 @@
 defaults:
-  - user: single_user
+  - user: triple_user
   - transforms: base_log_spectrogram
   - model: bi_lstm_ctc
   - optimizer: adam
@@ -15,10 +15,10 @@ weight_decay: 1e-5
 l1_loss_weight: 0
 
 seed: 1501
-batch_size: 1
+batch_size: 32
 num_workers: 1  # Number of workers for dataloading
-train: False  # Whether to train or only run validation and test
-checkpoint: logs/2025-03-13/13-58-19/checkpoints/epoch=47-step=11520.ckpt  # Optional path to checkpoint file
+train: Train  # Whether to train or only run validation and test
+checkpoint: null  # Optional path to checkpoint file
 monitor_metric: val/CER
 monitor_mode: min
 
@@ -26,7 +26,7 @@ trainer:
   accelerator: gpu
   devices: 1
   num_nodes: 1
-  max_epochs: 50
+  max_epochs: 150
   default_root_dir: ${hydra:runtime.output_dir}
 
 callbacks:
