@@ -1,5 +1,9 @@
 # @package _global_
 module:
+  # 128 & 2 -> val/CER=36.44, test/CER=35.01
+  # 128 & 4 -> val/CER=80.55, test/CER=78.06
+  # 256 & 2 -> val/CER=27.89, test/CER=26.755
+  # 256 & 4 -> val/CER=29.00, test/CER=28.63
   _target_: emg2qwerty.bi_lstm_lightning.BiLSTMModule
   in_features: 528  # LOG_SPECTROGRAM: n_mels * number of electrodes (16); BASE_LOG_SPECTROGRAM: (n_fft // 2 + 1) * number of electrodes (16)
   mlp_features: [256]
@@ -10,6 +14,6 @@ module:
   tds_conv_encoder_kernel_width: 15
 
 datamodule:
-  _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  _target_: emg2qwerty.bi_lstm_lightning.WindowedEMGDataModule
   window_length: 4000  # 4 sec windows for 2kHz EMG
   padding: [800, 200]  # No padding, [1800, 200]  # 900ms past context, 100ms future context
